@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>NutriWear</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>$(PRODUCT_NAME)</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+
+    <!-- Groq key injected from Secrets.xcconfig at build time -->
+    <key>GROQ_API_KEY</key>
+    <string>$(GROQ_API_KEY)</string>
+
+    <!-- Permissions -->
+    <key>NSCameraUsageDescription</key>
+    <string>NutriWear uses the camera to recognize your food and coach you in real time while you eat. Images are analyzed on the fly and not stored by default.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>NutriWear uses the microphone so you can ask your eating coach questions out loud.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>NutriWear transcribes your spoken questions so the coach can answer them.</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Pick a meal photo so NutriWear can analyze it (used on the Simulator where no camera is available).</string>
+
+    <!-- A valid UILaunchScreen is REQUIRED; without it iOS runs the app
+         letterboxed at a legacy size, which breaks full-screen layout. -->
+    <key>UILaunchScreen</key>
+    <dict/>
+
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+    </array>
+    <key>UIStatusBarStyle</key>
+    <string>UIStatusBarStyleLightContent</string>
+    <key>UIViewControllerBasedStatusBarAppearance</key>
+    <false/>
+</dict>
+</plist>

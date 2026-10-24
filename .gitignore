@@ -1,0 +1,14 @@
+# Secrets
+Secrets.xcconfig
+
+# Xcode / build
+*.xcodeproj
+*.xcworkspace
+DerivedData/
+build/
+.build/
+*.xcuserstate
+xcuserdata/
+
+# macOS
+.DS_Store
