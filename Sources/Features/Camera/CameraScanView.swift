@@ -55,11 +55,12 @@ struct CameraScanView: View {
                 Task { await analyze(image) }
             }
         }
-        .sheet(isPresented: $showAnalysis, onDismiss: {
-            // If the user logged or discarded, close the camera too.
-            if model.pendingMeal == nil { dismiss() }
-        }) {
-            AnalysisSheet(capturedImage: capturedImage)
+        .sheet(isPresented: $showAnalysis) {
+            // Keep the camera open after a meal is logged/discarded so the user
+            // can scan the next one. They leave via the ✕ button.
+            AnalysisSheet(capturedImage: capturedImage, onScanMore: {
+                showAnalysis = false
+            })
                 .environmentObject(model)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
@@ -243,7 +244,13 @@ struct CameraScanView: View {
     }
 
     private func analyze(_ image: UIImage) async {
-        await model.recognize(image: image, mealType: mealType)
+        // If a meal is already pending (user tapped "Scan another item"), merge
+        // the new foods into it; otherwise start a fresh meal.
+        if model.pendingMeal != nil {
+            await model.recognizeMore(image: image, mealType: mealType)
+        } else {
+            await model.recognize(image: image, mealType: mealType)
+        }
         if model.pendingMeal != nil {
             showAnalysis = true
         }

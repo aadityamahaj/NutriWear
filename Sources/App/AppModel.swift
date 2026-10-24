@@ -183,6 +183,26 @@ final class AppModel: ObservableObject {
         pendingMeal = meal
     }
 
+    /// Recognize another photo and ADD its foods to the current pending meal
+    /// (for scanning a multi-item meal one plate at a time). Starts a new
+    /// pending meal if none exists.
+    func recognizeMore(image: UIImage, mealType: String) async {
+        guard pendingMeal != nil else {
+            await recognize(image: image, mealType: mealType)
+            return
+        }
+        isRecognizing = true
+        recognitionNote = nil
+        let result = await recognition.recognize(image: image)
+        isRecognizing = false
+        guard !result.items.isEmpty else {
+            recognitionNote = result.note ?? "No new food detected in that shot."
+            return
+        }
+        mergeIntoPending(result.items)
+        recognitionNote = result.note
+    }
+
     // MARK: - Live sync → meal log
 
     /// Convert an ended wearable session into a logged meal (idempotent).

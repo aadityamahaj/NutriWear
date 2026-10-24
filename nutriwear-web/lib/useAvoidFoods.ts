@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 const KEY = "nutriwear.avoidFoods";
 
@@ -50,5 +50,6 @@ export function useAvoidFoods() {
     [foods]
   );
 
-  return { foods, add, addMany, remove, matches };
+  // Stable object identity so effects that depend on it don't re-run every render.
+  return useMemo(() => ({ foods, add, addMany, remove, matches }), [foods, add, addMany, remove, matches]);
 }

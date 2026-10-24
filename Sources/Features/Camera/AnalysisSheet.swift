@@ -7,6 +7,9 @@ struct AnalysisSheet: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     var capturedImage: UIImage?
+    /// Called when the user wants to scan another item into this meal; the
+    /// presenter closes the sheet so the camera is ready for another capture.
+    var onScanMore: (() -> Void)? = nil
 
     @State private var editingItem: FoodItem?
     @State private var showTimer = false
@@ -226,6 +229,13 @@ struct AnalysisSheet: View {
             Text("While you eat")
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(Theme.textPrimary)
+
+            if let onScanMore {
+                Button { onScanMore() } label: {
+                    behaviorRow(icon: "plus.viewfinder", title: "Scan another item",
+                                subtitle: "Add more food to this meal")
+                }
+            }
 
             Button { showTimer = true } label: {
                 behaviorRow(icon: "timer", title: "Start eating timer",
