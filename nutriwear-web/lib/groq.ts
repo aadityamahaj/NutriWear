@@ -59,6 +59,57 @@ export async function recognizeFood(imageDataURL: string): Promise<RecognizeResu
   }
 }
 
+// MARK: - Lightweight "is there food?" check (auto-start confirmation)
+
+const PRESENCE_SYSTEM = `You are NutriWear's food presence detector for a wearable camera.
+Look at the photo. Decide if there is a MEAL or FOOD that a person is about to eat
+(a plate/bowl/tray of food, a sandwich, a snack in hand, etc.) ANYWHERE in the frame —
+it does NOT need to be centered.
+Ignore: empty tables, packaging only, drinks alone, faces, rooms, screens.
+Return ONLY this JSON: {"food": true|false, "confidence": 0-1, "label": "short name of the food or empty"}`;
+
+export interface FoodPresence {
+  food: boolean;
+  confidence: number;
+  label: string;
+  usedLiveAI: boolean;
+}
+
+/** Fast yes/no: is there food anywhere in this frame? Used to confirm auto-start. */
+export async function detectFoodPresence(imageDataURL: string): Promise<FoodPresence> {
+  if (!isConfigured()) {
+    // Without a key we can't confirm; let the client heuristic decide.
+    return { food: false, confidence: 0, label: "", usedLiveAI: false };
+  }
+  try {
+    const raw = await chat({
+      model: VISION_MODEL,
+      temperature: 0,
+      maxTokens: 600,
+      jsonMode: true,
+      messages: [
+        { role: "system", content: PRESENCE_SYSTEM },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Is there food anywhere in this image? Return only the JSON." },
+            { type: "image_url", image_url: { url: imageDataURL } },
+          ],
+        },
+      ],
+    });
+    const obj = JSON.parse(extractJSON(raw));
+    return {
+      food: obj.food === true,
+      confidence: Math.min(1, Math.max(0, num(obj.confidence))),
+      label: typeof obj.label === "string" ? obj.label.trim() : "",
+      usedLiveAI: true,
+    };
+  } catch {
+    return { food: false, confidence: 0, label: "", usedLiveAI: false };
+  }
+}
+
 // MARK: - Before / after consumption comparison
 
 export interface ConsumptionItem {
