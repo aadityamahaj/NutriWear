@@ -103,7 +103,10 @@ export default function WearPage() {
     return () => { cancelled = true; streamRef.current?.getTracks().forEach((t) => t.stop()); };
   }, []);
 
-  const captureFrame = useCallback((maxDim = 720): string | null => {
+  // Smaller default + modest JPEG quality. Vision models tokenize images by
+  // resolution, so keeping frames small is the biggest lever on Groq's
+  // tokens-per-minute limit — it's what keeps the AI from hitting 429s.
+  const captureFrame = useCallback((maxDim = 512): string | null => {
     const video = videoRef.current, canvas = canvasRef.current;
     if (!video || !canvas || !video.videoWidth) return null;
     const scale = Math.min(1, maxDim / Math.max(video.videoWidth, video.videoHeight));
@@ -112,7 +115,7 @@ export default function WearPage() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/jpeg", 0.7);
+    return canvas.toDataURL("image/jpeg", 0.6);
   }, []);
 
   const postSession = useCallback(

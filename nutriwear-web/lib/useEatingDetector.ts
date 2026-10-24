@@ -46,10 +46,14 @@ export function useEatingDetector({ enabled, captureFrame, onDetect, onHint }: A
     const ctx = tmp.getContext("2d", { willReadFrequently: true });
 
     const confirmWithVision = async () => {
-      // Throttle vision calls: at most once every 4s.
+      // Throttle vision calls hard (once per 8s): idle detection shares the
+      // same Groq token budget as the real recognition/comparison, so we spend
+      // it sparingly here and save headroom for the meal analysis that matters.
       const now = Date.now();
-      if (confirmingRef.current || now - lastConfirmAt.current < 4000) return;
-      const full = captureFrame(640);
+      if (confirmingRef.current || now - lastConfirmAt.current < 8000) return;
+      // A small frame is enough for a yes/no food check, and keeps the vision
+      // model's token usage low so it doesn't eat into the rate limit.
+      const full = captureFrame(384);
       if (!full) return;
       confirmingRef.current = true;
       lastConfirmAt.current = now;
@@ -135,8 +139,9 @@ export function useEatingDetector({ enabled, captureFrame, onDetect, onHint }: A
           onHint?.("Watching for your meal…");
         }
 
-        // Once the cheap gate is interested, confirm with the vision model.
-        if (richStreak.current >= 2) {
+        // Only confirm with the vision model once the cheap gate is quite
+        // confident (3 consecutive rich+stable samples), to conserve tokens.
+        if (richStreak.current >= 3) {
           void confirmWithVision();
         }
       };

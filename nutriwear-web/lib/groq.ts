@@ -223,7 +223,7 @@ function offlineConsumption(reason: string): ConsumptionResult {
     eatenCalories: 214,
     leftoverCalories: 71,
     usedLiveAI: false,
-    note: `Offline sample (${reason}). Add a Groq key for a live before/after comparison.`,
+    note: friendlyReason(reason),
   };
 }
 
@@ -310,10 +310,16 @@ async function chat(args: ChatArgs, attempt = 0): Promise<string> {
     body: JSON.stringify(body),
   });
 
-  // On a rate limit, honor Retry-After once before giving up.
-  if (res.status === 429 && attempt < 1) {
-    const retryAfter = parseFloat(res.headers.get("retry-after") || "2");
-    const waitMs = Math.min(8000, Math.max(1000, (isNaN(retryAfter) ? 2 : retryAfter) * 1000));
+  // On a rate limit (429), honor Retry-After and retry with exponential
+  // backoff. Groq's per-minute token window clears quickly, so a couple of
+  // short waits usually recovers instead of dropping to the offline fallback.
+  if (res.status === 429 && attempt < 3) {
+    const retryAfter = parseFloat(res.headers.get("retry-after") || "");
+    const backoff = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
+    const waitMs = Math.min(
+      9000,
+      Math.max(1000, isNaN(retryAfter) ? backoff : retryAfter * 1000)
+    );
     await new Promise((r) => setTimeout(r, waitMs));
     return chat(args, attempt + 1);
   }
@@ -333,6 +339,21 @@ function extractJSON(raw: string): string {
   const end = raw.lastIndexOf("}");
   if (start === -1 || end === -1 || start >= end) return raw;
   return raw.slice(start, end + 1);
+}
+
+/** Turn a raw internal error reason into a short, user-friendly note. */
+function friendlyReason(reason: string): string {
+  const r = reason.toLowerCase();
+  if (r.includes("429") || r.includes("rate limit")) {
+    return "The AI is busy right now (rate limit). Give it a few seconds and try again.";
+  }
+  if (r.includes("no api key")) {
+    return "Add a Groq key to enable live AI.";
+  }
+  if (r.includes("timeout") || r.includes("network") || r.includes("fetch")) {
+    return "Couldn't reach the AI service. Check your connection and try again.";
+  }
+  return "The AI couldn't respond just now — showing an estimate instead.";
 }
 
 function num(v: unknown): number {
@@ -396,6 +417,6 @@ function offlineRecognition(reason: string): RecognizeResult {
       },
     ],
     usedLiveAI: false,
-    note: `Offline sample (${reason}). Add a Groq key for live recognition.`,
+    note: friendlyReason(reason),
   };
 }
