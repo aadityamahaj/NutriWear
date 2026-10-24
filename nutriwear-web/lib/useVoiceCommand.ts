@@ -49,10 +49,15 @@ export function useVoiceCommand({ enabled, onCommand, alwaysOn = false }: Args) 
     }
   };
 
+  const pageActive = () =>
+    typeof document === "undefined" || document.visibilityState === "visible";
+
   const scheduleRestart = useCallback((delay: number) => {
     clearRestartTimer();
     restartTimerRef.current = setTimeout(() => {
-      if (!wantListeningRef.current || !recognitionRef.current) return;
+      // Never (re)start while the page is backgrounded — the mic must be off
+      // whenever the site isn't the active, visible page.
+      if (!wantListeningRef.current || !recognitionRef.current || !pageActive()) return;
       try {
         recognitionRef.current.start();
       } catch {
@@ -119,7 +124,8 @@ export function useVoiceCommand({ enabled, onCommand, alwaysOn = false }: Args) 
     };
 
     rec.onend = () => {
-      if (wantListeningRef.current && recognitionRef.current) {
+      // Only keep listening if the user still wants it AND the page is active.
+      if (wantListeningRef.current && recognitionRef.current && pageActive()) {
         // Back off when recovering from network errors; restart quickly otherwise.
         const delay = networkFailuresRef.current > 0
           ? Math.min(600 * networkFailuresRef.current, 4000)
@@ -175,6 +181,51 @@ export function useVoiceCommand({ enabled, onCommand, alwaysOn = false }: Args) 
       stop();
     }
   }, [alwaysOn, enabled, supported, start, stop]);
+
+  // Privacy: the mic is ONLY on while this site is the active, visible page.
+  // When the tab is hidden / backgrounded / the app is minimized, stop
+  // recognition immediately (releasing the mic) but keep the user's intent so
+  // it can resume when they return. Also stop on page unload/navigation.
+  useEffect(() => {
+    const suspend = () => {
+      clearRestartTimer();
+      try { recognitionRef.current?.stop(); } catch { /* noop */ }
+      setListening(false);
+    };
+
+    const resumeIfWanted = () => {
+      // Resume only if the user still wants it, it's enabled here, and the page
+      // is actually visible/focused again.
+      if (
+        wantListeningRef.current &&
+        enabled &&
+        recognitionRef.current &&
+        document.visibilityState === "visible"
+      ) {
+        scheduleRestart(300);
+      }
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") resumeIfWanted();
+      else suspend();
+    };
+
+    document.addEventListener("visibilitychange", onVisibility);
+    // pagehide fires on tab close and bfcache navigation; blur covers losing
+    // window focus on desktop (switching apps/windows). Both release the mic.
+    window.addEventListener("pagehide", suspend);
+    window.addEventListener("blur", suspend);
+    // Returning focus to the window re-arms listening if still wanted.
+    window.addEventListener("focus", resumeIfWanted);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", suspend);
+      window.removeEventListener("blur", suspend);
+      window.removeEventListener("focus", resumeIfWanted);
+    };
+  }, [enabled, scheduleRestart]);
 
   // Fully tear down when the hook is disabled (e.g. phase change).
   useEffect(() => {
