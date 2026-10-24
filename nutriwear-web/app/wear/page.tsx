@@ -182,19 +182,31 @@ export default function WearPage() {
       items: ConsumptionItem[]; startCalories: number; eatenCalories: number; leftoverCalories: number; note: string | null; usedLiveAI?: boolean;
     };
 
-    if (before && after) {
+    // Send the already-recognized start items so the comparison is anchored to
+    // them (consistent numbers; eating everything == the start calories).
+    const startItemsPayload = startItemsRef.current.map((i) => ({
+      name: i.name,
+      calories: i.macros.calories,
+      protein: i.macros.protein,
+      carbs: i.macros.carbs,
+      fat: i.macros.fat,
+      confidence: i.confidence,
+    }));
+
+    if (before && after && startItemsPayload.length > 0) {
       try {
         const r = await fetch("/api/compare", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ before, after }),
+          body: JSON.stringify({ before, after, startItems: startItemsPayload }),
         });
         res = await r.json();
       } catch {
         res = fallbackFromStart();
       }
     } else {
-      // No before image — just recognize whatever's there as "eaten".
+      // No before/after image or nothing recognized — assume the start plate
+      // was fully eaten (still consistent with what was shown).
       res = fallbackFromStart();
     }
 

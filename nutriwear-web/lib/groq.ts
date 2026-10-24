@@ -132,85 +132,137 @@ export interface ConsumptionResult {
   note: string | null;
 }
 
-const COMPARE_SYSTEM = `You are NutriWear's food vision engine. You are given TWO photos of the SAME meal:
-the FIRST is BEFORE eating (full plate) and the SECOND is AFTER eating (leftovers).
+// The "before" plate was ALREADY recognized at the start of the meal. To keep
+// the numbers consistent, the comparison must NOT re-estimate the plate — it
+// only estimates how much of each known item is LEFT. Eaten amounts are then
+// computed from the known start values, so "ate 100%" exactly equals the
+// originally detected calories.
+const COMPARE_SYSTEM = `You are NutriWear's food vision engine for before/after eating comparison.
+You are given a list of the foods that were on the plate at the START (already
+measured, with calories and macros), the BEFORE photo, and the AFTER photo.
 
-Your job:
-1. Identify each distinct food on the BEFORE plate and estimate its full-portion calories and macros.
-2. Compare BEFORE vs AFTER to estimate what fraction of EACH food is still left (0 = all eaten, 1 = untouched).
-3. Compute how much was actually EATEN = full portion * (1 - leftoverFraction).
+Do NOT re-estimate portions or calories. Your ONLY job is to look at the AFTER
+photo and judge, for each START item, what fraction is still LEFT:
+  0.0 = fully eaten, 1.0 = untouched.
+If the AFTER plate looks empty/clean, every leftover_fraction is 0.
 
-Numbers are approximate; set confidence per item. If the AFTER plate looks empty, leftoverFraction is ~0.
+Match each item by name to the START list. Return ONLY this JSON (no markdown):
+{"items":[{"name":"string","leftover_fraction":number}],"note":"one short sentence"}`;
 
-Return ONLY this JSON (no markdown, no reasoning text):
-{"items":[{"name":"string","start_calories":number,"leftover_fraction":number,"eaten_calories":number,"eaten_protein_g":number,"eaten_carbs_g":number,"eaten_fat_g":number,"confidence":"high|medium|low"}],"note":"one short sentence"}`;
+/** An already-recognized start item (full-portion macros known). */
+export interface StartItem {
+  name: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  confidence?: "high" | "medium" | "low";
+}
 
-/** Compare a before/after pair and estimate what was actually eaten. */
+/**
+ * Compare before/after, anchored to the known start items. The model only
+ * returns leftover fractions; eaten amounts are derived from the KNOWN start
+ * values, guaranteeing consistency with what was shown at meal start (and that
+ * eating everything yields exactly the start calories).
+ */
 export async function compareConsumption(
   beforeDataURL: string,
-  afterDataURL: string
+  afterDataURL: string,
+  startItems: StartItem[]
 ): Promise<ConsumptionResult> {
-  if (!isConfigured()) return offlineConsumption("no API key");
+  // Can't anchor without known start items, or without a key → fall back.
+  if (!isConfigured()) return consumptionFromStart(startItems, "no API key");
+  if (startItems.length === 0) return consumptionFromStart(startItems, "no start items");
+
   try {
+    const startList = startItems
+      .map((i) => `- ${i.name}: ${Math.round(i.calories)} kcal, ${Math.round(i.protein)}p ${Math.round(i.carbs)}c ${Math.round(i.fat)}f`)
+      .join("\n");
     const raw = await chat({
       model: VISION_MODEL,
       temperature: 0.2,
-      maxTokens: 2200,
+      maxTokens: 1200,
       jsonMode: true,
       messages: [
         { role: "system", content: COMPARE_SYSTEM },
         {
           role: "user",
           content: [
-            { type: "text", text: "FIRST image = BEFORE (full plate):" },
+            { type: "text", text: `START items on the plate:\n${startList}\n\nBEFORE photo (full plate):` },
             { type: "image_url", image_url: { url: beforeDataURL } },
-            { type: "text", text: "SECOND image = AFTER (leftovers). Compare and return only the JSON." },
+            { type: "text", text: "AFTER photo (leftovers). For each START item, return only its leftover_fraction as JSON." },
             { type: "image_url", image_url: { url: afterDataURL } },
           ],
         },
       ],
     });
-    return parseConsumption(raw);
+    return applyLeftovers(raw, startItems);
   } catch (e) {
-    return offlineConsumption(e instanceof Error ? e.message : "error");
+    return consumptionFromStart(startItems, e instanceof Error ? e.message : "error");
   }
 }
 
-function parseConsumption(raw: string): ConsumptionResult {
+/** Build a consistent result from KNOWN start items + model leftover fractions. */
+function applyLeftovers(raw: string, startItems: StartItem[]): ConsumptionResult {
+  let fractions: Record<string, number> = {};
+  let note: string | null = null;
   try {
     const obj = JSON.parse(extractJSON(raw));
-    const rawItems = Array.isArray(obj.items) ? obj.items : [];
-    const items: ConsumptionItem[] = rawItems
-      .filter((it: { name?: string }) => it && typeof it.name === "string" && it.name.trim())
-      .map((it: Record<string, unknown>): ConsumptionItem => {
-        const start = num(it.start_calories);
-        const leftover = Math.min(1, Math.max(0, num(it.leftover_fraction)));
-        const eaten = it.eaten_calories != null ? num(it.eaten_calories) : start * (1 - leftover);
-        const conf = String(it.confidence ?? "medium").toLowerCase();
-        return {
-          name: String(it.name),
-          startCalories: start,
-          leftoverFraction: leftover,
-          eatenCalories: eaten,
-          protein: num(it.eaten_protein_g),
-          carbs: num(it.eaten_carbs_g),
-          fat: num(it.eaten_fat_g),
-          confidence: (["high", "medium", "low"].includes(conf) ? conf : "medium") as ConsumptionItem["confidence"],
-        };
-      });
-    const startCalories = items.reduce((a, i) => a + i.startCalories, 0);
-    const eatenCalories = items.reduce((a, i) => a + i.eatenCalories, 0);
-    return {
-      items,
-      startCalories,
-      eatenCalories,
-      leftoverCalories: Math.max(0, startCalories - eatenCalories),
-      usedLiveAI: true,
-      note: typeof obj.note === "string" && obj.note.trim() ? obj.note.trim() : null,
-    };
+    note = typeof obj.note === "string" && obj.note.trim() ? obj.note.trim() : null;
+    for (const it of (Array.isArray(obj.items) ? obj.items : [])) {
+      if (it && typeof it.name === "string") {
+        fractions[it.name.toLowerCase().trim()] = Math.min(1, Math.max(0, num(it.leftover_fraction)));
+      }
+    }
   } catch {
-    return offlineConsumption("parse error");
+    // If parsing fails, assume everything was eaten (consistent with start).
+    fractions = {};
   }
+
+  const items: ConsumptionItem[] = startItems.map((s) => {
+    const left = fractions[s.name.toLowerCase().trim()] ?? 0;
+    const eatenRatio = 1 - left;
+    return {
+      name: s.name,
+      startCalories: s.calories,
+      leftoverFraction: left,
+      eatenCalories: s.calories * eatenRatio,
+      protein: s.protein * eatenRatio,
+      carbs: s.carbs * eatenRatio,
+      fat: s.fat * eatenRatio,
+      confidence: s.confidence ?? "medium",
+    };
+  });
+  return summarize(items, true, note);
+}
+
+/** No usable comparison → assume the start items were fully eaten (consistent). */
+function consumptionFromStart(startItems: StartItem[], reason: string): ConsumptionResult {
+  if (startItems.length === 0) return offlineConsumption(reason);
+  const items: ConsumptionItem[] = startItems.map((s) => ({
+    name: s.name,
+    startCalories: s.calories,
+    leftoverFraction: 0,
+    eatenCalories: s.calories,
+    protein: s.protein,
+    carbs: s.carbs,
+    fat: s.fat,
+    confidence: s.confidence ?? "medium",
+  }));
+  return summarize(items, true, "Assumed you finished the plate.");
+}
+
+function summarize(items: ConsumptionItem[], usedLiveAI: boolean, note: string | null): ConsumptionResult {
+  const startCalories = items.reduce((a, i) => a + i.startCalories, 0);
+  const eatenCalories = items.reduce((a, i) => a + i.eatenCalories, 0);
+  return {
+    items,
+    startCalories,
+    eatenCalories,
+    leftoverCalories: Math.max(0, startCalories - eatenCalories),
+    usedLiveAI,
+    note,
+  };
 }
 
 function offlineConsumption(reason: string): ConsumptionResult {
