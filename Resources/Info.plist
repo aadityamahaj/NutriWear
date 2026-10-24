@@ -36,6 +36,8 @@
     <string>NutriWear transcribes your spoken questions so the coach can answer them.</string>
     <key>NSPhotoLibraryUsageDescription</key>
     <string>Pick a meal photo so NutriWear can analyze it (used on the Simulator where no camera is available).</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>NutriWear connects to your NutriWear wearable and other Bluetooth devices to sync your eating sessions.</string>
 
     <!-- A valid UILaunchScreen is REQUIRED; without it iOS runs the app
          letterboxed at a legacy size, which breaks full-screen layout. -->

@@ -59,9 +59,50 @@ struct SettingsView: View {
                          : "Auto-calculated from your body stats and goal (Mifflin-St Jeor TDEE).")
                 }
 
-                Section("Coaching") {
-                    Toggle("Slow-down reminders", isOn: $model.profile.slowEatingReminders)
+                Section {
+                    Toggle("Auto-coach while eating", isOn: $model.profile.coaching.autoCoach)
                         .tint(Theme.calories)
+                    Picker("Deliver cues as", selection: $model.profile.coaching.channel) {
+                        ForEach(CoachDeliveryChannel.allCases) { Text($0.label).tag($0) }
+                    }
+                } header: {
+                    Text("Proactive coaching")
+                } footer: {
+                    Text(model.profile.coaching.autoCoach
+                         ? "The coach watches your pace and nudges you automatically while you eat."
+                         : "Auto-coach is off. Pick the specific cues you still want below.")
+                }
+
+                if !model.profile.coaching.autoCoach {
+                    Section("Cues to keep") {
+                        ForEach(CoachCue.allCases) { cue in
+                            Toggle(isOn: cueBinding(cue)) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Label(cue.title, systemImage: cue.icon)
+                                    Text(cue.detail)
+                                        .font(.caption)
+                                        .foregroundStyle(Theme.textSecondary)
+                                }
+                            }
+                            .tint(Theme.calories)
+                        }
+                    }
+                }
+
+                Section("Devices") {
+                    NavigationLink {
+                        BluetoothView().environmentObject(model)
+                    } label: {
+                        HStack {
+                            Label("Bluetooth devices", systemImage: "sensor.tag.radiowaves.forward.fill")
+                            Spacer()
+                            if let d = model.bluetooth.connectedDevice {
+                                Text(d.name).font(.footnote).foregroundStyle(Theme.positive)
+                            } else {
+                                Text("Not connected").font(.footnote).foregroundStyle(Theme.textTertiary)
+                            }
+                        }
+                    }
                 }
 
                 Section("AI") {
@@ -89,6 +130,17 @@ struct SettingsView: View {
             }
         }
         .preferredColorScheme(.dark)
+    }
+
+    /// Binding for toggling a single proactive cue in the preferences set.
+    private func cueBinding(_ cue: CoachCue) -> Binding<Bool> {
+        Binding(
+            get: { model.profile.coaching.enabledCues.contains(cue) },
+            set: { on in
+                if on { model.profile.coaching.enabledCues.insert(cue) }
+                else { model.profile.coaching.enabledCues.remove(cue) }
+            }
+        )
     }
 
     private func targetStepper(_ label: String, _ value: Binding<Double>, _ step: Double, _ unit: String) -> some View {

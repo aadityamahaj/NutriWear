@@ -4,7 +4,9 @@ import SwiftUI
 /// or speak. Answers are shown and optionally spoken aloud.
 struct CoachView: View {
     @EnvironmentObject var model: AppModel
-    @StateObject private var speech = SpeechService()
+    /// Use the app-wide speech service so voice commands drive eating sessions
+    /// and spoken cues share one engine. Injected so the view observes it.
+    @ObservedObject var speech: SpeechService
 
     @State private var messages: [CoachMessage] = []
     @State private var inputText = ""
@@ -51,6 +53,9 @@ struct CoachView: View {
                 }
             }
 
+            if model.isEating {
+                activeSessionBanner
+            }
             if let err = speech.errorMessage {
                 Text(err)
                     .font(.system(size: 12))
@@ -126,6 +131,46 @@ struct CoachView: View {
         .padding(.vertical, 8)
     }
 
+    /// Shows the live eating session with a hands-free listen control.
+    private var activeSessionBanner: some View {
+        HStack(spacing: 10) {
+            Circle().fill(Theme.calories).frame(width: 8, height: 8)
+            Text("Eating · \(durationString(model.activeSession?.elapsedSeconds ?? 0))")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.textPrimary)
+                .monospacedDigit()
+            Spacer()
+            Button {
+                Task {
+                    if speech.isListening { speech.stopListening() }
+                    else {
+                        if !speech.authorized { await speech.requestAuthorization() }
+                        if speech.authorized { speech.startListening(command: true) }
+                    }
+                }
+            } label: {
+                Text(speech.isListening ? "Listening…" : "Hands-free")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(speech.isListening ? .black : Theme.calories)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(Capsule().fill(speech.isListening ? Theme.calories : Theme.card))
+            }
+            Button { model.finishEatingSession() } label: {
+                Text("I'm done")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Theme.textSecondary)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(Capsule().fill(Theme.cardElevated))
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 6)
+    }
+
+    private func durationString(_ seconds: Int) -> String {
+        String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+
     private var inputBar: some View {
         HStack(spacing: 10) {
             // Mic button — requests permission lazily on first tap.
@@ -174,12 +219,24 @@ struct CoachView: View {
         guard !question.isEmpty, !thinking else { return }
         if speech.isListening { speech.stopListening() }
 
+        // Session commands ("let's eat", "I'm done") act directly rather than
+        // becoming a coach question.
+        if VoiceCommandRouter.isSessionCommand(question) {
+            _ = model.handleVoiceTranscript(question)
+            inputText = ""
+            speech.transcript = ""
+            let ack = model.isEating ? "Started your meal — I'm watching your pace." : "Okay, logged. Nice work."
+            messages.append(CoachMessage(role: .user, text: question))
+            messages.append(CoachMessage(role: .coach, text: ack))
+            return
+        }
+
         messages.append(CoachMessage(role: .user, text: question))
         inputText = ""
         speech.transcript = ""
         thinking = true
 
-        let duration = contextMeal?.durationSeconds
+        let duration = model.activeSession?.elapsedSeconds ?? contextMeal?.durationSeconds
         Task {
             let answer = await model.askCoach(question, currentMeal: contextMeal, eatingDurationSeconds: duration)
             await MainActor.run {

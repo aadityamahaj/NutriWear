@@ -7,13 +7,13 @@ struct MealTimerView: View {
     @Environment(\.dismiss) private var dismiss
     var meal: Meal?
 
-    @State private var elapsed = 0
-    @State private var running = true
-    @State private var lastNudge = 0
-    @State private var paceMessage = "Nice and steady. Try putting your fork down between bites."
+    @State private var handsFree = false
 
-    // A gentle "slow down" threshold: if a sizeable meal is going very fast.
-    private var mealCalories: Double { meal?.totals.calories ?? 0 }
+    // Live session values come from the AppModel engine so duration persists
+    // and the proactive coach runs consistently.
+    private var elapsed: Int { model.activeSession?.elapsedSeconds ?? 0 }
+    private var running: Bool { !(model.activeSession?.paused ?? false) }
+    private var mealCalories: Double { meal?.totals.calories ?? model.activeSession?.mealCalories ?? 0 }
 
     var body: some View {
         VStack(spacing: 24) {
@@ -50,11 +50,11 @@ struct MealTimerView: View {
                 }
             }
 
-            if model.profile.slowEatingReminders {
+            if let cue = model.lastCueMessage {
                 Card {
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "sparkles").foregroundStyle(Theme.protein)
-                        Text(paceMessage)
+                        Text(cue)
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.textPrimary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -63,10 +63,14 @@ struct MealTimerView: View {
                 .padding(.horizontal)
             }
 
+            handsFreeToggle
+
             Spacer()
 
             HStack(spacing: 12) {
-                Button { running.toggle() } label: {
+                Button {
+                    running ? model.pauseEatingSession() : model.resumeEatingSession()
+                } label: {
                     Label(running ? "Pause" : "Resume", systemImage: running ? "pause.fill" : "play.fill")
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(Theme.textPrimary)
@@ -74,6 +78,7 @@ struct MealTimerView: View {
                         .background(RoundedRectangle(cornerRadius: 14).fill(Theme.cardElevated))
                 }
                 Button {
+                    model.finishEatingSession()
                     dismiss()
                 } label: {
                     Text("Done")
@@ -88,13 +93,48 @@ struct MealTimerView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background.ignoresSafeArea())
-        .task {
-            // Main-actor tick loop; avoids Combine Timer Sendable issues under Swift 6.
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                guard running else { continue }
-                elapsed += 1
-                updatePace()
+        .onAppear {
+            if model.activeSession == nil {
+                model.startEatingSession(meal: meal, startedBy: .scan)
+            }
+        }
+    }
+
+    /// Hands-free listening toggle: "I'm done" ends the meal without tapping.
+    private var handsFreeToggle: some View {
+        Button {
+            Task { await toggleHandsFree() }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: handsFree ? "waveform.circle.fill" : "mic.circle")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(handsFree ? Theme.calories : Theme.textSecondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(handsFree ? "Listening — say \"I'm done\"" : "Hands-free voice")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text("Control the meal by voice")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.textTertiary)
+                }
+                Spacer()
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 14).fill(Theme.card))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(handsFree ? Theme.calories.opacity(0.5) : Theme.stroke, lineWidth: 1))
+        }
+        .padding(.horizontal)
+    }
+
+    private func toggleHandsFree() async {
+        if handsFree {
+            model.speech.stopListening()
+            handsFree = false
+        } else {
+            if !model.speech.authorized { await model.speech.requestAuthorization() }
+            if model.speech.authorized {
+                model.speech.startListening(command: true)
+                handsFree = true
             }
         }
     }
@@ -119,17 +159,5 @@ struct MealTimerView: View {
         if elapsed < 6 * 60 && mealCalories > 400 { return "A bit quick" }
         if elapsed >= 15 * 60 { return "Great pace" }
         return "Eating"
-    }
-
-    private func updatePace() {
-        // Nudge roughly every 4 minutes if going fast on a larger meal.
-        if model.profile.slowEatingReminders,
-           elapsed - lastNudge >= 240,
-           elapsed < 10 * 60, mealCalories > 400 {
-            lastNudge = elapsed
-            paceMessage = "You're moving quickly. Slowing down helps your body register fullness. Try a sip of water between bites."
-        } else if elapsed == 20 * 60 {
-            paceMessage = "20 minutes in — that's a well-paced meal. Your fullness signals have had time to catch up."
-        }
     }
 }

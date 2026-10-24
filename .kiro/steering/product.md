@@ -34,3 +34,31 @@ questions by typing or **by voice**.
 
 Both surfaces share the same Groq-backed intelligence and the same nutrition
 concepts (food items, macros, eating sessions).
+
+## Proactive coaching & voice control
+
+- **Proactive, not just reactive.** During a live eating session the coach
+  watches pace and fires cues on its own (slow-down, halfway check-in, hydration,
+  finish summary). On iOS pace is time-vs-meal-size (`CoachService.PaceSnapshot`);
+  on the web wearable it's a real plate-fullness watcher (`useProactivePace.ts`)
+  that nudges "slow down" when food disappears too fast.
+- **User-controlled cues + delivery.** `CoachingPreferences` lets the user turn
+  auto-coaching on (all cues) or off (pick specific cues). Delivery channel is
+  the user's choice: spoken (TTS), local notifications, or both.
+- **Voice commands.** `VoiceCommandRouter` classifies a transcript into intents:
+  "let's eat" / "start eating" → start a session; "I'm done" / "finished" → stop
+  logging; "pause"/"resume"; anything else → a coach question. The iOS
+  `SpeechService` supports a hands-free command mode that keeps listening and
+  auto-restarts so "I'm done" is caught without tapping.
+
+## Device connectivity (forward-looking)
+
+- `BluetoothService` (CoreBluetooth) scans for and connects to BLE devices so
+  future NutriWear hardware can pair. Accessible from Settings → Devices.
+
+## Insights
+
+- The **Insights** tab (`EatingInsights` + `InsightsView`) analyzes logged meals
+  for pace, meal timing, late-night eating, portion leftovers, and protein share,
+  then asks the LLM for personalized improvement suggestions (digestion, habits,
+  eating length).

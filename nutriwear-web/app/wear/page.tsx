@@ -6,6 +6,7 @@ import { usePairingCode } from "@/lib/useChannel";
 import { EatingSession, FoodItem } from "@/lib/types";
 import { useEatingDetector } from "@/lib/useEatingDetector";
 import { useVoiceCommand } from "@/lib/useVoiceCommand";
+import { useProactivePace } from "@/lib/useProactivePace";
 
 type Phase = "idle" | "eating" | "analyzing" | "done";
 
@@ -260,13 +261,33 @@ export default function WearPage() {
   const handleUtterance = useCallback((text: string) => {
     const t = text.toLowerCase().trim();
     if (!t) return;
-    if (/\b(done|finished|i'?m done|stop eating|that'?s it|all done)\b/.test(t)) { doneEating(); return; }
+    // Start keyword — only meaningful while idle.
+    if (/\b(let'?s eat|start eating|time to eat|i'?m eating)\b/.test(t)) {
+      if (phaseRef.current === "idle") startEating("manual");
+      return;
+    }
+    if (/\b(done|finished|i'?m done|i'?m full|stop eating|that'?s it|all done)\b/.test(t)) { doneEating(); return; }
     askCoach(text);
-  }, [doneEating, askCoach]);
+  }, [doneEating, askCoach, startEating]);
 
+  // Voice is active both while idle (to catch "let's eat") and while eating.
   const { listening, supported: voiceSupported, lastHeard, error: voiceError, toggle } = useVoiceCommand({
-    enabled: phase === "eating",
+    enabled: phase === "idle" || phase === "eating",
     onCommand: handleUtterance,
+  });
+
+  // Proactive pace coaching: nudge to slow down if food disappears too fast.
+  const proactiveCue = useCallback((text: string) => {
+    setCoachLines((p) => [...p, { role: "coach", text }]);
+    speak(text);
+  }, [speak]);
+
+  useProactivePace({
+    enabled: phase === "eating",
+    captureFrame,
+    startCalories: startItemsRef.current.reduce((a, i) => a + i.macros.calories, 0),
+    startedAt,
+    onCue: proactiveCue,
   });
 
   const reset = useCallback(() => {

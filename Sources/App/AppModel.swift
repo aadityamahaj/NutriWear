@@ -27,6 +27,41 @@ final class AppModel: ObservableObject {
     /// IDs of synced sessions already logged, to avoid duplicates.
     private var loggedSyncIDs: Set<String> = []
 
+    // MARK: - Proactive eating session
+
+    /// Shared speech service so voice commands and spoken cues use one engine.
+    let speech = SpeechService()
+    let notifications = NotificationService()
+    /// Bluetooth connectivity for current and future NutriWear hardware.
+    let bluetooth = BluetoothService()
+
+    /// The in-progress eating session (nil when not eating). Drives the
+    /// proactive coach and hands-free voice commands.
+    @Published var activeSession: ActiveEatingSession?
+    /// The latest proactive cue, surfaced in the UI as a banner.
+    @Published var lastCueMessage: String?
+
+    /// AI-generated eating-habit suggestions (Insights screen).
+    @Published var improvementSuggestions: [String] = []
+    @Published var loadingSuggestions = false
+
+    /// Computed analytics over all logged meals.
+    var insights: EatingInsights { EatingInsights(meals: meals) }
+
+    /// Regenerate personalized improvement suggestions from logged history.
+    func refreshSuggestions() async {
+        loadingSuggestions = true
+        let facts = insights.factSheet
+        let result = await coach.improvementSuggestions(profile: profile, facts: facts)
+        improvementSuggestions = result
+        loadingSuggestions = false
+    }
+
+    private var sessionTask: Task<Void, Never>?
+    private var firedCues: Set<CoachCue> = []
+
+    var isEating: Bool { activeSession != nil }
+
     var aiConfigured: Bool { GroqClient.isConfigured }
 
     init() {
@@ -36,6 +71,26 @@ final class AppModel: ObservableObject {
         // When the wearable ends a session, log it as a meal automatically.
         sync.onSessionEnded = { [weak self] session in
             self?.logSyncedSession(session)
+        }
+
+        // Route hands-free voice (command mode only): session commands act
+        // directly; a non-command utterance becomes a coach question answered
+        // aloud. The Coach screen's push-to-talk mic handles its own sends, so
+        // we only auto-answer here when listening hands-free during a meal.
+        speech.onFinalTranscript = { [weak self] transcript in
+            guard let self, self.speech.commandMode else { return }
+            if let question = self.handleVoiceTranscript(transcript) {
+                guard !question.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                Task {
+                    let meal = self.activeSession?.meal ?? self.pendingMeal ?? self.meals(on: Date()).first
+                    let answer = await self.askCoach(question, currentMeal: meal,
+                                                     eatingDurationSeconds: self.activeSession?.elapsedSeconds)
+                    await MainActor.run {
+                        self.lastCueMessage = answer
+                        if self.profile.coaching.channel.usesVoice { self.speech.speak(answer) }
+                    }
+                }
+            }
         }
         #if DEBUG
         if ProcessInfo.processInfo.environment["NW_SEED"] == "1" {
@@ -198,6 +253,169 @@ final class AppModel: ObservableObject {
     func askCoach(_ question: String, currentMeal: Meal?, eatingDurationSeconds: Int?) async -> String {
         let ctx = coachContext(currentMeal: currentMeal, eatingDurationSeconds: eatingDurationSeconds)
         return await coach.answer(question: question, context: ctx)
+    }
+
+    // MARK: - Proactive eating session engine
+
+    /// Begin a live eating session. `meal` is the scanned plate if available.
+    /// Starts the proactive coach loop and (optionally) hands-free listening.
+    func startEatingSession(meal: Meal? = nil, startedBy: ActiveEatingSession.StartSource = .manual) {
+        guard activeSession == nil else { return }
+        let session = ActiveEatingSession(startedAt: Date(), meal: meal, startedBy: startedBy)
+        activeSession = session
+        firedCues = []
+        lastCueMessage = nil
+
+        // Ask for notification permission up front if that channel is used.
+        if profile.coaching.channel.usesNotification {
+            Task { await notifications.requestAuthorizationIfNeeded() }
+        }
+
+        // Start-of-meal confirmation cue.
+        fireCue(.startReminder)
+
+        // Begin the pace-watching loop.
+        sessionTask?.cancel()
+        sessionTask = Task { [weak self] in await self?.runSessionLoop() }
+    }
+
+    func pauseEatingSession() {
+        activeSession?.paused = true
+    }
+
+    func resumeEatingSession() {
+        activeSession?.paused = false
+    }
+
+    /// End the session. Logs the meal (if any) with its eating duration and
+    /// delivers the finish summary cue.
+    func finishEatingSession() {
+        guard let session = activeSession else { return }
+        sessionTask?.cancel()
+        sessionTask = nil
+
+        // Deliver the wrap-up before we tear down state.
+        fireCue(.finishSummary)
+
+        if let meal = session.meal {
+            if pendingMeal?.id == meal.id {
+                // Still pending → log it now, carrying the eating duration.
+                confirmPendingMeal(durationSeconds: session.elapsedSeconds)
+            } else if let idx = meals.firstIndex(where: { $0.id == meal.id }) {
+                // Already logged (e.g. voice-started on an existing meal) →
+                // just attach the measured duration.
+                meals[idx].durationSeconds = session.elapsedSeconds
+            } else {
+                var logged = meal
+                logged.durationSeconds = session.elapsedSeconds
+                meals.append(logged)
+            }
+        }
+
+        activeSession = nil
+        firedCues = []
+        // Stop hands-free listening if it was on for this session.
+        if speech.commandMode { speech.stopListening() }
+    }
+
+    /// The pace-watching loop. Ticks each second, advancing elapsed time and
+    /// evaluating whether a proactive cue should fire.
+    private func runSessionLoop() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard var session = activeSession else { break }
+            guard !session.paused else { continue }
+            session.elapsedSeconds += 1
+            activeSession = session
+            evaluateCues(for: session)
+        }
+    }
+
+    /// Decide which cue (if any) to fire at the current elapsed time.
+    private func evaluateCues(for session: ActiveEatingSession) {
+        let prefs = profile.coaching
+        guard prefs.isActive else { return }
+        let pace = paceSnapshot(for: session)
+
+        // Slow-down: fire once when a big meal is going too fast (after ~90s).
+        if !firedCues.contains(.slowDown),
+           session.elapsedSeconds >= 90,
+           pace.isTooFast {
+            fireCue(.slowDown, pace: pace)
+        }
+
+        // Halfway check-in around the 8-minute mark on a normal-length meal.
+        if !firedCues.contains(.halfwayCheck),
+           session.elapsedSeconds == 8 * 60 {
+            fireCue(.halfwayCheck, pace: pace)
+        }
+
+        // Hydration nudge at ~4 minutes if opted in.
+        if !firedCues.contains(.hydration),
+           session.elapsedSeconds == 4 * 60 {
+            fireCue(.hydration, pace: pace)
+        }
+    }
+
+    private func paceSnapshot(for session: ActiveEatingSession) -> CoachService.PaceSnapshot {
+        CoachService.PaceSnapshot(
+            elapsedSeconds: session.elapsedSeconds,
+            mealCalories: session.mealCalories,
+            consumedFraction: session.meal?.consumedFraction
+        )
+    }
+
+    /// Fire a proactive cue if preferences allow it, generating a personalized
+    /// line and delivering it via the chosen channel(s).
+    private func fireCue(_ cue: CoachCue, pace: CoachService.PaceSnapshot? = nil) {
+        let prefs = profile.coaching
+        guard prefs.shouldFire(cue) else { return }
+        firedCues.insert(cue)
+
+        let snapshot = pace ?? (activeSession.map { paceSnapshot(for: $0) }
+                                ?? CoachService.PaceSnapshot(elapsedSeconds: 0, mealCalories: 0, consumedFraction: nil))
+        let ctx = coachContext(currentMeal: activeSession?.meal,
+                               eatingDurationSeconds: activeSession?.elapsedSeconds)
+        Task { [weak self] in
+            guard let self else { return }
+            let message = await self.coach.cueMessage(for: cue, context: ctx, pace: snapshot)
+            await MainActor.run { self.deliverCue(message, cue: cue) }
+        }
+    }
+
+    private func deliverCue(_ message: String, cue: CoachCue) {
+        lastCueMessage = message
+        let channel = profile.coaching.channel
+        if channel.usesVoice {
+            speech.speak(message)
+        }
+        if channel.usesNotification {
+            notifications.notify(title: "NutriWear Coach", body: message, identifier: cue.rawValue)
+        }
+    }
+
+    // MARK: - Voice command handling
+
+    /// Route a final spoken transcript to the right action. Returns the coach
+    /// question text when the utterance was NOT a session command (so the
+    /// caller can display/answer it); nil when a command was handled.
+    func handleVoiceTranscript(_ transcript: String) -> String? {
+        switch VoiceCommandRouter.classify(transcript) {
+        case .startEating:
+            if activeSession == nil {
+                startEatingSession(meal: pendingMeal ?? meals(on: Date()).first, startedBy: .voice)
+            }
+            return nil
+        case .doneEating:
+            if activeSession != nil { finishEatingSession() }
+            return nil
+        case .pause:
+            pauseEatingSession(); return nil
+        case .resume:
+            resumeEatingSession(); return nil
+        case .askCoach(let q):
+            return q
+        }
     }
 
     // MARK: - Meal type helper

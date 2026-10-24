@@ -13,11 +13,22 @@ final class SpeechService: NSObject, ObservableObject {
     @Published var authorized = false
     @Published var errorMessage: String?
 
+    /// When true, the recognizer keeps restarting after each final result so it
+    /// can hear hands-free commands (e.g. "I'm done") throughout a meal.
+    @Published var commandMode = false
+
+    /// Fired on main actor whenever a FINAL transcript segment is produced.
+    /// The owner decides whether it's a command or a coach question.
+    var onFinalTranscript: ((String) -> Void)?
+
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private let audioEngine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private let synthesizer = AVSpeechSynthesizer()
+
+    /// User intent to keep listening (drives auto-restart in command mode).
+    private var wantsListening = false
 
     override init() {
         super.init()
@@ -66,7 +77,15 @@ final class SpeechService: NSObject, ObservableObject {
 
     // MARK: - Listening
 
-    func startListening() {
+    /// Start recognizing. In `command` mode the recognizer auto-restarts after
+    /// each final result so it can keep hearing hands-free commands.
+    func startListening(command: Bool = false) {
+        commandMode = command
+        wantsListening = true
+        beginRecognition()
+    }
+
+    private func beginRecognition() {
         guard authorized, !isListening else { return }
 
         // The recognizer can be nil (locale unsupported) or temporarily
@@ -118,19 +137,26 @@ final class SpeechService: NSObject, ObservableObject {
             task = recognizer.recognitionTask(with: request) { [weak self] result, error in
                 guard let self else { return }
                 if let result {
-                    Task { @MainActor in self.transcript = result.bestTranscription.formattedString }
+                    let text = result.bestTranscription.formattedString
+                    let isFinal = result.isFinal
+                    Task { @MainActor in
+                        self.transcript = text
+                        if isFinal {
+                            let final = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !final.isEmpty { self.onFinalTranscript?(final) }
+                            self.handleRecognitionStopped()
+                        }
+                    }
                 }
                 if let error {
                     Task { @MainActor in
                         // Surface a real failure instead of silently stopping, so
                         // the user knows nothing was understood.
-                        if self.transcript.isEmpty {
+                        if self.transcript.isEmpty && !self.commandMode {
                             self.errorMessage = "Didn't catch that: \(error.localizedDescription)"
                         }
-                        self.stopListening()
+                        self.handleRecognitionStopped()
                     }
-                } else if result?.isFinal ?? false {
-                    Task { @MainActor in self.stopListening() }
                 }
             }
         } catch {
@@ -139,15 +165,41 @@ final class SpeechService: NSObject, ObservableObject {
         }
     }
 
+    /// Called when the current recognition task ends (final result or error).
+    /// In command mode we restart so listening continues hands-free; otherwise
+    /// we fully stop.
+    private func handleRecognitionStopped() {
+        teardownAudio()
+        if commandMode && wantsListening {
+            // Brief pause avoids an immediate-restart throw from AVAudioEngine.
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                if self.commandMode && self.wantsListening && !self.isListening {
+                    self.beginRecognition()
+                }
+            }
+        } else {
+            isListening = false
+        }
+    }
+
+    /// Fully stop listening (user tapped stop, or we left command mode).
     func stopListening() {
-        guard isListening else { return }
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
+        wantsListening = false
+        commandMode = false
+        teardownAudio()
+        isListening = false
+    }
+
+    private func teardownAudio() {
+        if audioEngine.isRunning {
+            audioEngine.stop()
+            audioEngine.inputNode.removeTap(onBus: 0)
+        }
         request?.endAudio()
         task?.cancel()
         request = nil
         task = nil
-        isListening = false
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 

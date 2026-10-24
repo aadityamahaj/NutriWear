@@ -18,7 +18,11 @@ Sources/                 iOS app (SwiftUI)
     Onboarding/          First-run profile setup
     Shared/              Reusable views (macros, photo picker)
   Models/                Plain data types (Nutrition, UserProfile)
-  Services/              Non-UI logic (Groq, recognition, speech, sync, persistence)
+    Insights/            Analysis + personalized improvement plan
+    Settings/            Bluetooth device pairing
+  Services/              Non-UI logic (Groq, recognition, speech, sync,
+                         persistence, voice routing, proactive coach,
+                         notifications, insights analytics, bluetooth)
 Resources/               Info.plist, asset catalog
 nutriwear-web/           Next.js companion ("wearable" camera + API)
 project.yml              XcodeGen spec — the project is generated from this
@@ -41,8 +45,18 @@ Secrets.xcconfig         Groq API key (gitignored; see Secrets.example.xcconfig)
   (`GROQ_API_KEY`) and read via `GroqClient.apiKey`. Never hardcode keys.
 - **Concurrency:** Swift 6, but strict concurrency is set to `minimal` in
   `project.yml`. UI-facing types are `@MainActor`. System callbacks that fire on
-  background queues (speech/mic permission, synthesizer delegate) must hop back
-  to the main actor with `Task { @MainActor in ... }` — see `SpeechService`.
+  background queues (speech/mic permission, synthesizer/CoreBluetooth delegates)
+  must hop back to the main actor with `Task { @MainActor in ... }` — see
+  `SpeechService` and `BluetoothService`. Non-Sendable objects crossing that
+  boundary (e.g. `CBPeripheral`) use a small `@unchecked Sendable` box; this is
+  safe only because those delegate queues are `.main`.
+- **Eating sessions & proactive coach** are driven from `AppModel`
+  (`startEatingSession`/`finishEatingSession`, the pace loop, and `fireCue`),
+  using `CoachingPreferences` to decide which cues fire and how they're
+  delivered. Keep this logic in the model, not the views.
+- **Voice intents** go through `VoiceCommandRouter.classify` — add new spoken
+  commands there (pure, regex-based, unit-testable) rather than scattering
+  keyword checks in views.
 
 ## Style
 

@@ -1,12 +1,13 @@
 import SwiftUI
 
 enum AppTab: Int, CaseIterable {
-    case dashboard, coach, live, history
+    case dashboard, coach, insights, live, history
 
     var title: String {
         switch self {
         case .dashboard: return "Today"
         case .coach: return "Coach"
+        case .insights: return "Insights"
         case .live: return "Live"
         case .history: return "History"
         }
@@ -16,6 +17,7 @@ enum AppTab: Int, CaseIterable {
         switch self {
         case .dashboard: return "chart.pie.fill"
         case .coach: return "sparkles"
+        case .insights: return "chart.line.uptrend.xyaxis"
         case .live: return "antenna.radiowaves.left.and.right"
         case .history: return "clock.fill"
         }
@@ -64,7 +66,8 @@ struct RootView: View {
             Group {
                 switch selectedTab {
                 case .dashboard: DashboardView(showCamera: $showCamera)
-                case .coach: CoachView()
+                case .coach: CoachView(speech: model.speech)
+                case .insights: InsightsView()
                 case .live: LiveView(sync: model.sync)
                 case .history: HistoryView()
                 }
@@ -91,6 +94,7 @@ struct CustomTabBar: View {
         HStack(spacing: 0) {
             tabButton(.dashboard)
             tabButton(.coach)
+            tabButton(.insights)
 
             // Central scan button
             Button {
@@ -118,7 +122,7 @@ struct CustomTabBar: View {
             tabButton(.live)
             tabButton(.history)
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, 10)
         .padding(.top, 12)
         .padding(.bottom, 4)
         .background(

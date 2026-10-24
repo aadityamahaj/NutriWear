@@ -58,6 +58,44 @@ struct CoachService {
         }
     }
 
+    /// Personalized suggestions for improving eating habits, pace, and
+    /// digestion, based on the user's logged-meal analytics. Returns 3-5 short
+    /// bullet-style lines. Falls back to rule-based advice offline.
+    func improvementSuggestions(profile: UserProfile, facts: String) async -> [String] {
+        let user = """
+        Based on the user's eating-habit data below, give 3-5 short, specific, \
+        encouraging suggestions to improve their eating pace, meal timing, \
+        digestion, and overall habits. Personalize to their goal and diet. \
+        One sentence each. Return ONLY the suggestions, one per line, no numbering \
+        or bullets.
+
+        User:
+        \(profile.coachContext)
+
+        Eating-habit data:
+        \(facts)
+        """
+        let fallback = Self.fallbackSuggestions(profile: profile).joined(separator: "\n")
+        let text = await ask(user, context: Context(profile: profile, consumedToday: .zero,
+                                                    currentMeal: nil, eatingDurationSeconds: nil),
+                             fallback: fallback)
+        return text
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .map { $0.replacingOccurrences(of: #"^[\-\*\d\.\)\s]+"#, with: "", options: .regularExpression) }
+            .filter { !$0.isEmpty }
+    }
+
+    private static func fallbackSuggestions(profile: UserProfile) -> [String] {
+        [
+            "Slow meals to 20+ minutes — put your fork down between bites so fullness signals catch up.",
+            "Start meals with protein or vegetables to feel satisfied on less.",
+            "Keep roughly 4-5 hours between meals to avoid getting overly hungry.",
+            "Finish eating a couple hours before bed to help digestion and sleep.",
+            "Sip water through the meal; thirst often masquerades as hunger."
+        ]
+    }
+
     /// A proactive tip generated right after a meal is recognized.
     func proactiveTip(for context: Context) async -> String {
         let user = """
@@ -69,6 +107,24 @@ struct CoachService {
         \(context.summary)
         """
         return await ask(user, context: context, fallback: Self.fallbackTip(context))
+    }
+
+    /// A short, personalized proactive cue to deliver mid-meal (spoken or
+    /// notified). `pace` describes how fast the meal is going so the model can
+    /// be specific. Falls back to a local line when AI is unavailable.
+    func cueMessage(for cue: CoachCue, context: Context, pace: PaceSnapshot) async -> String {
+        let user = """
+        Generate ONE very short proactive coaching line (max ~18 words) to say to \
+        the user WHILE they eat. Cue type: \(cue.rawValue).
+        Guidance for this cue: \(cue.detail).
+        Be warm, specific, and personalized to their meal and pace. No preamble, \
+        no quotes — just the line.
+
+        Live pace: \(pace.description)
+        Context:
+        \(context.summary)
+        """
+        return await ask(user, context: context, fallback: Self.fallbackCue(cue, context, pace))
     }
 
     /// Answer a free-form user question (voice or text).
@@ -98,6 +154,52 @@ struct CoachService {
             return trimmed.isEmpty ? fallback : trimmed
         } catch {
             return fallback
+        }
+    }
+
+    /// A compact description of eating pace for proactive cues.
+    struct PaceSnapshot {
+        var elapsedSeconds: Int
+        var mealCalories: Double
+        /// 0...1 fraction of the meal consumed, if known (web before/after).
+        var consumedFraction: Double?
+
+        /// kcal per minute (rough intensity of eating).
+        var kcalPerMinute: Double {
+            let mins = max(0.25, Double(elapsedSeconds) / 60.0)
+            let eaten = (consumedFraction ?? 1.0) * mealCalories
+            return eaten / mins
+        }
+
+        /// Heuristic: a sizeable meal disappearing very quickly.
+        var isTooFast: Bool {
+            elapsedSeconds < 6 * 60 && mealCalories > 400 && kcalPerMinute > 90
+        }
+
+        var description: String {
+            var s = "elapsed \(elapsedSeconds / 60)m \(elapsedSeconds % 60)s, meal ~\(Int(mealCalories)) kcal"
+            if let f = consumedFraction { s += ", ~\(Int(f * 100))% eaten" }
+            s += String(format: ", ~%.0f kcal/min", kcalPerMinute)
+            return s
+        }
+    }
+
+    private static func fallbackCue(_ cue: CoachCue, _ context: Context, _ pace: PaceSnapshot) -> String {
+        let name = context.profile.name == "there" ? "" : " \(context.profile.name)"
+        switch cue {
+        case .slowDown:
+            return "Ease up a touch\(name) — that plate's going fast. Set the fork down for a breath between bites."
+        case .halfwayCheck:
+            return "Halfway there. Check in: are you still genuinely hungry, or eating on autopilot?"
+        case .startReminder:
+            return "Got it — I'm watching this meal. Say \"I'm done\" when you finish."
+        case .finishSummary:
+            let mins = pace.elapsedSeconds / 60
+            return mins >= 15
+                ? "Nice, well-paced meal at \(mins) min. That gives fullness time to land."
+                : "Logged. That was quick at \(mins) min — next time try stretching it past 15."
+        case .hydration:
+            return "Sip some water between bites — it helps you notice fullness sooner."
         }
     }
 
