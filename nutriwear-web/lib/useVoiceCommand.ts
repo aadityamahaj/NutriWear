@@ -5,14 +5,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 interface Args {
   enabled: boolean;
   onCommand: (text: string) => void;
+  /** Keep listening continuously and auto-recover from transient errors. */
+  alwaysOn?: boolean;
 }
 
 /**
  * Web Speech API voice listener. Reports status/errors so the UI can explain
  * failures instead of silently doing nothing. Falls back to text input when
  * unsupported (e.g. Firefox) or permission is denied.
+ *
+ * Chrome streams audio to a Google speech backend, so a `network` error means
+ * that endpoint was unreachable (blocked browser build, firewall, offline). We
+ * retry with backoff rather than giving up, and only surface a hard message
+ * after several consecutive failures so a brief blip self-heals.
  */
-export function useVoiceCommand({ enabled, onCommand }: Args) {
+export function useVoiceCommand({ enabled, onCommand, alwaysOn = false }: Args) {
   const [listening, setListening] = useState(false);
   const [supported, setSupported] = useState(false);
   const [lastHeard, setLastHeard] = useState("");
@@ -20,6 +27,10 @@ export function useVoiceCommand({ enabled, onCommand }: Args) {
 
   const recognitionRef = useRef<any>(null);
   const wantListeningRef = useRef(false); // user intent; drives auto-restart
+  const alwaysOnRef = useRef(alwaysOn);
+  alwaysOnRef.current = alwaysOn;
+  const networkFailuresRef = useRef(0);
+  const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onCommandRef = useRef(onCommand);
   onCommandRef.current = onCommand;
 
@@ -29,6 +40,26 @@ export function useVoiceCommand({ enabled, onCommand }: Args) {
         ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
         : null;
     setSupported(!!SR);
+  }, []);
+
+  const clearRestartTimer = () => {
+    if (restartTimerRef.current) {
+      clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = null;
+    }
+  };
+
+  const scheduleRestart = useCallback((delay: number) => {
+    clearRestartTimer();
+    restartTimerRef.current = setTimeout(() => {
+      if (!wantListeningRef.current || !recognitionRef.current) return;
+      try {
+        recognitionRef.current.start();
+      } catch {
+        // Still too soon — back off a bit more.
+        scheduleRestart(Math.min(delay * 2, 4000));
+      }
+    }, delay);
   }, []);
 
   const buildRecognition = useCallback(() => {
@@ -45,6 +76,8 @@ export function useVoiceCommand({ enabled, onCommand }: Args) {
     };
 
     rec.onresult = (event: any) => {
+      // A successful result means the backend is reachable — reset failures.
+      networkFailuresRef.current = 0;
       let interim = "";
       let finalText = "";
       for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -62,44 +95,50 @@ export function useVoiceCommand({ enabled, onCommand }: Args) {
 
     rec.onerror = (e: any) => {
       const code = e?.error ?? "unknown";
-      if (code === "no-speech" || code === "aborted") return; // benign; restart handles it
+      if (code === "no-speech" || code === "aborted") return; // benign; onend restarts
       if (code === "not-allowed" || code === "service-not-allowed") {
-        setError("Microphone blocked. Allow mic access in the browser and try again.");
+        setError("Microphone blocked. Allow mic access in your browser settings, then try again.");
         wantListeningRef.current = false;
         setListening(false);
-      } else if (code === "network") {
-        setError("Speech service network error. Try again, or type your question.");
-      } else {
-        setError(`Voice error: ${code}. You can type instead.`);
+        return;
       }
+      if (code === "network") {
+        networkFailuresRef.current += 1;
+        if (networkFailuresRef.current >= 4) {
+          // Repeated failures → the speech backend is genuinely unreachable here.
+          setError(
+            "Can't reach the speech service in this browser. Try Chrome or Safari (with Google speech enabled), check your connection, or type your question."
+          );
+        } else {
+          setError("Reconnecting to the speech service…");
+        }
+        // Keep trying — onend will fire next and restart with backoff.
+        return;
+      }
+      setError(`Voice error: ${code}. You can type instead.`);
     };
 
     rec.onend = () => {
-      // The API stops itself periodically; restart if the user still wants to listen.
       if (wantListeningRef.current && recognitionRef.current) {
-        try {
-          recognitionRef.current.start();
-        } catch {
-          // A restart too soon throws; schedule a retry.
-          setTimeout(() => {
-            if (wantListeningRef.current && recognitionRef.current) {
-              try { recognitionRef.current.start(); } catch { setListening(false); }
-            }
-          }, 300);
-        }
+        // Back off when recovering from network errors; restart quickly otherwise.
+        const delay = networkFailuresRef.current > 0
+          ? Math.min(600 * networkFailuresRef.current, 4000)
+          : 250;
+        scheduleRestart(delay);
       } else {
         setListening(false);
       }
     };
 
     return rec;
-  }, []);
+  }, [scheduleRestart]);
 
   const start = useCallback(() => {
     if (!supported) {
-      setError("Voice isn't supported in this browser. Use Chrome/Safari, or type your question.");
+      setError("Voice isn't supported in this browser. Use Chrome or Safari, or type your question.");
       return;
     }
+    networkFailuresRef.current = 0;
     wantListeningRef.current = true;
     if (!recognitionRef.current) recognitionRef.current = buildRecognition();
     try {
@@ -113,6 +152,7 @@ export function useVoiceCommand({ enabled, onCommand }: Args) {
 
   const stop = useCallback(() => {
     wantListeningRef.current = false;
+    clearRestartTimer();
     try {
       recognitionRef.current?.stop();
     } catch {
@@ -126,9 +166,21 @@ export function useVoiceCommand({ enabled, onCommand }: Args) {
     else start();
   }, [listening, start, stop]);
 
+  // Auto-start when always-on is enabled (and supported); stop when disabled.
+  useEffect(() => {
+    if (!enabled) return;
+    if (alwaysOn && supported && !wantListeningRef.current) {
+      start();
+    } else if (!alwaysOn && wantListeningRef.current) {
+      stop();
+    }
+  }, [alwaysOn, enabled, supported, start, stop]);
+
+  // Fully tear down when the hook is disabled (e.g. phase change).
   useEffect(() => {
     if (!enabled) {
       wantListeningRef.current = false;
+      clearRestartTimer();
       try { recognitionRef.current?.stop(); } catch { /* noop */ }
       recognitionRef.current = null;
       setListening(false);

@@ -49,6 +49,19 @@ export default function WearPage() {
   const [coachLines, setCoachLines] = useState<CoachLine[]>([]);
   const [coachBusy, setCoachBusy] = useState(false);
 
+  // "Always listening" — keep the mic on continuously (persisted).
+  const [alwaysListen, setAlwaysListen] = useState(false);
+  useEffect(() => {
+    setAlwaysListen(localStorage.getItem("nutriwear.alwaysListen") === "1");
+  }, []);
+  const toggleAlwaysListen = useCallback(() => {
+    setAlwaysListen((prev) => {
+      const next = !prev;
+      localStorage.setItem("nutriwear.alwaysListen", next ? "1" : "0");
+      return next;
+    });
+  }, []);
+
   // Snapshots held in refs (not re-rendered, used by compare).
   const beforeImageRef = useRef<string | null>(null);
   const phaseRef = useRef<Phase>("idle");
@@ -274,6 +287,7 @@ export default function WearPage() {
   const { listening, supported: voiceSupported, lastHeard, error: voiceError, toggle } = useVoiceCommand({
     enabled: phase === "idle" || phase === "eating",
     onCommand: handleUtterance,
+    alwaysOn: alwaysListen,
   });
 
   // Proactive pace coaching: nudge to slow down if food disappears too fast.
@@ -336,6 +350,14 @@ export default function WearPage() {
             </div>
             <button className="btn-primary" onClick={() => startEating("manual")}>Start eating</button>
             <p className="dim" style={{ fontSize: 12, marginTop: 8 }}>I snapshot your full plate now, then compare when you&apos;re done.</p>
+            {voiceSupported && (
+              <AlwaysListenToggle
+                on={alwaysListen}
+                listening={listening}
+                error={voiceError}
+                onToggle={toggleAlwaysListen}
+              />
+            )}
           </div>
         )}
 
@@ -344,6 +366,7 @@ export default function WearPage() {
             time={`${mm}:${ss}`} scanningStart={scanningStart} startCals={Math.round(startCals)}
             startCount={startItems.length} listening={listening} voiceSupported={voiceSupported}
             lastHeard={lastHeard} voiceError={voiceError} coachLines={coachLines} coachBusy={coachBusy}
+            alwaysListen={alwaysListen} onToggleAlwaysListen={toggleAlwaysListen}
             onToggleVoice={toggle} onDone={doneEating} onAsk={askCoach}
           />
         )}
@@ -387,6 +410,7 @@ function EatingHud(props: {
   time: string; scanningStart: boolean; startCals: number; startCount: number;
   listening: boolean; voiceSupported: boolean; lastHeard: string; voiceError: string | null;
   coachLines: CoachLine[]; coachBusy: boolean;
+  alwaysListen: boolean; onToggleAlwaysListen: () => void;
   onToggleVoice: () => void; onDone: () => void; onAsk: (q: string) => void;
 }) {
   const [typed, setTyped] = useState("");
@@ -410,13 +434,21 @@ function EatingHud(props: {
         </div>
       )}
 
-      {props.voiceSupported && (
+      {props.voiceSupported && !props.alwaysListen && (
         <button className="btn-ghost" onClick={props.onToggleVoice} style={{ marginBottom: 8, color: props.listening ? "var(--orange)" : undefined }}>
           {props.listening ? "🎙️ Listening — say a question or “done”" : "🎙️ Tap to talk to coach"}
         </button>
       )}
+      {props.voiceSupported && (
+        <AlwaysListenToggle
+          on={props.alwaysListen}
+          listening={props.listening}
+          error={props.voiceError}
+          onToggle={props.onToggleAlwaysListen}
+        />
+      )}
       {props.lastHeard ? <p className="dim" style={{ fontSize: 11, marginBottom: 6 }}>heard: “{props.lastHeard}”</p> : null}
-      {props.voiceError ? <p style={{ fontSize: 11, marginBottom: 6, color: "var(--yellow)" }}>{props.voiceError}</p> : null}
+      {props.voiceError && !props.alwaysListen ? <p style={{ fontSize: 11, marginBottom: 6, color: "var(--yellow)" }}>{props.voiceError}</p> : null}
       {!props.voiceSupported ? <p className="dim" style={{ fontSize: 11, marginBottom: 6 }}>Voice needs Chrome or Safari — type below instead.</p> : null}
 
       <form onSubmit={(e) => { e.preventDefault(); if (typed.trim()) { props.onAsk(typed.trim()); setTyped(""); } }} style={{ display: "flex", gap: 8, marginBottom: 10 }}>
@@ -426,6 +458,48 @@ function EatingHud(props: {
       </form>
 
       <button className="btn-primary" onClick={props.onDone}>✓ Done eating</button>
+    </div>
+  );
+}
+
+function AlwaysListenToggle({ on, listening, error, onToggle }: {
+  on: boolean; listening: boolean; error: string | null; onToggle: () => void;
+}) {
+  return (
+    <div style={{ marginTop: 8, marginBottom: 6 }}>
+      <button
+        onClick={onToggle}
+        className="btn-ghost"
+        style={{
+          display: "flex", alignItems: "center", gap: 10, width: "100%",
+          color: on ? "var(--orange)" : undefined,
+        }}
+      >
+        <span
+          style={{
+            width: 36, height: 20, borderRadius: 999, position: "relative", flexShrink: 0,
+            background: on ? "var(--orange)" : "var(--card-2)",
+            border: "1px solid var(--stroke)", transition: "background 0.15s",
+          }}
+        >
+          <span
+            style={{
+              position: "absolute", top: 1, left: on ? 17 : 1, width: 16, height: 16,
+              borderRadius: "50%", background: "#fff", transition: "left 0.15s",
+            }}
+          />
+        </span>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>
+          {on ? (listening ? "Always listening — on" : "Always listening (reconnecting…)") : "Always listening — off"}
+        </span>
+      </button>
+      {on && (
+        <p className="dim" style={{ fontSize: 11, marginTop: 4, textAlign: "left" }}>
+          {error && error.startsWith("Can't reach")
+            ? error
+            : "The mic stays on and keeps hearing you — say \u201clet\u2019s eat\u201d, \u201cI\u2019m done\u201d, or ask anything."}
+        </p>
+      )}
     </div>
   );
 }
