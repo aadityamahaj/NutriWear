@@ -7,6 +7,7 @@ import { EatingSession, FoodItem } from "@/lib/types";
 import { useEatingDetector } from "@/lib/useEatingDetector";
 import { useVoiceCommand } from "@/lib/useVoiceCommand";
 import { useProactivePace } from "@/lib/useProactivePace";
+import { classifyDirected } from "@/lib/directedSpeech";
 
 type Phase = "idle" | "eating" | "analyzing" | "done";
 
@@ -51,6 +52,8 @@ export default function WearPage() {
 
   // "Always listening" — keep the mic on continuously (persisted).
   const [alwaysListen, setAlwaysListen] = useState(false);
+  const alwaysListenRef = useRef(false);
+  useEffect(() => { alwaysListenRef.current = alwaysListen; }, [alwaysListen]);
   useEffect(() => {
     setAlwaysListen(localStorage.getItem("nutriwear.alwaysListen") === "1");
   }, []);
@@ -272,16 +275,33 @@ export default function WearPage() {
   }, [speak]);
 
   const handleUtterance = useCallback((text: string) => {
-    const t = text.toLowerCase().trim();
-    if (!t) return;
-    // Start keyword — only meaningful while idle.
-    if (/\b(let'?s eat|start eating|time to eat|i'?m eating)\b/.test(t)) {
-      if (phaseRef.current === "idle") startEating("manual");
-      return;
+    // In always-on mode, require a wake word ("hey NutriWear", "coach, …") for
+    // questions so ambient conversation is ignored. Session commands ("I'm
+    // done", "let's eat") always act. In manual tap mode, the tap is the signal
+    // so any speech is treated as directed at the coach.
+    const intent = classifyDirected(text, alwaysListenRef.current);
+    switch (intent.kind) {
+      case "start":
+        if (phaseRef.current === "idle") startEating("manual");
+        return;
+      case "done":
+        doneEating();
+        return;
+      case "question":
+        if (!intent.text) {
+          // Bare wake word with no question — acknowledge without calling the LLM.
+          const ack = "Yes? Ask me anything about your meal.";
+          setCoachLines((p) => [...p, { role: "coach", text: ack }]);
+          speak(ack);
+          return;
+        }
+        askCoach(intent.text);
+        return;
+      case "ignore":
+      default:
+        return;
     }
-    if (/\b(done|finished|i'?m done|i'?m full|stop eating|that'?s it|all done)\b/.test(t)) { doneEating(); return; }
-    askCoach(text);
-  }, [doneEating, askCoach, startEating]);
+  }, [doneEating, askCoach, startEating, speak]);
 
   // Voice is active both while idle (to catch "let's eat") and while eating.
   const { listening, supported: voiceSupported, lastHeard, error: voiceError, toggle } = useVoiceCommand({
@@ -497,7 +517,7 @@ function AlwaysListenToggle({ on, listening, error, onToggle }: {
         <p className="dim" style={{ fontSize: 11, marginTop: 4, textAlign: "left" }}>
           {error && error.startsWith("Can't reach")
             ? error
-            : "The mic stays on and keeps hearing you — say \u201clet\u2019s eat\u201d, \u201cI\u2019m done\u201d, or ask anything."}
+            : "Mic stays on but ignores ambient talk. Say \u201cHey NutriWear, \u2026\u201d to ask a question. \u201cLet\u2019s eat\u201d and \u201cI\u2019m done\u201d always work."}
         </p>
       )}
     </div>
