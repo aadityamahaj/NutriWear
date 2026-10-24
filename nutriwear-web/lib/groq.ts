@@ -245,7 +245,9 @@ export async function askCoach(question: string, context: string): Promise<strin
     const raw = await chat({
       model: TEXT_MODEL,
       temperature: 0.5,
-      maxTokens: 220,
+      // gpt-oss-120b is a reasoning model and spends tokens thinking before the
+      // visible answer, so a tight cap truncates the reply. Give headroom.
+      maxTokens: 800,
       messages: [
         { role: "system", content: COACH_SYSTEM },
         { role: "user", content: userMsg },
@@ -266,7 +268,8 @@ export async function coachTip(foodSummary: string): Promise<string> {
     const raw = await chat({
       model: TEXT_MODEL,
       temperature: 0.6,
-      maxTokens: 120,
+      // Headroom for the reasoning model so the short tip isn't truncated.
+      maxTokens: 500,
       messages: [
         { role: "system", content: COACH_SYSTEM },
         {
