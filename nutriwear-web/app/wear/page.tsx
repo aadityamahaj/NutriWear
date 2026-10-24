@@ -165,7 +165,8 @@ export default function WearPage() {
             body: JSON.stringify({ image: img }),
           });
           const data = await res.json();
-          if (Array.isArray(data.items) && data.items.length) {
+          // Don't plant the offline placeholder (pizza) if the AI fell back.
+          if (data.usedLiveAI !== false && Array.isArray(data.items) && data.items.length) {
             setStartItems(data.items);
             postSession("update", { id: sessionIdRef.current ?? undefined, items: data.items, startedAt: startedAtRef.current });
           }
@@ -237,13 +238,45 @@ export default function WearPage() {
     });
   }, [captureFrame, postSession]);
 
-  // --- Keep scanning for NEW items automatically while eating ---
-  // Captures the frame on a timer, recognizes it, and merges anything new into
-  // the plate — so holding up a second item adds it with no tap. Silent on
-  // empty frames; only speaks up when something new is actually added.
+  // --- Scan for NEW items only when the SCENE CHANGES (change-gated) ---
+  // The expensive Groq vision call must NOT run on a blind timer (that hammers
+  // the rate limit and makes every call fail → the "pizza" offline fallback).
+  // Instead we cheaply fingerprint the frame on-device each tick; only when the
+  // scene changes a lot and then SETTLES (you've presented a new item and held
+  // it still) do we fire one recognition and merge anything new.
   const [scanningMore, setScanningMore] = useState(false);
   const scanBusyRef = useRef(false);
-  const autoScan = useCallback(async () => {
+  const lastScannedFP = useRef<number[] | null>(null); // fingerprint at last AI scan
+  const prevFP = useRef<number[] | null>(null);        // fingerprint last tick
+  const stableTicks = useRef(0);
+
+  /** Cheap brightness-histogram fingerprint of the center of the frame. */
+  const fingerprint = useCallback((): number[] | null => {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth) return null;
+    const c = document.createElement("canvas");
+    c.width = 32; c.height = 32;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(video, 0, 0, 32, 32);
+    const { data } = ctx.getImageData(8, 8, 16, 16); // center region
+    const hist = new Array(8).fill(0);
+    for (let i = 0; i < data.length; i += 4) {
+      const lum = (data[i] + data[i + 1] + data[i + 2]) / 3;
+      hist[Math.min(7, Math.floor(lum / 32))]++;
+    }
+    const total = hist.reduce((a, b) => a + b, 0) || 1;
+    return hist.map((h) => h / total);
+  }, []);
+
+  const diff = (a: number[] | null, b: number[] | null): number => {
+    if (!a || !b) return 1;
+    let d = 0;
+    for (let i = 0; i < a.length; i++) d += Math.abs(a[i] - b[i]);
+    return d; // 0 = identical, up to ~2
+  };
+
+  const scanNow = useCallback(async () => {
     if (phaseRef.current !== "eating" || scanBusyRef.current) return;
     const img = captureFrame();
     if (!img) return;
@@ -253,35 +286,64 @@ export default function WearPage() {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: img }),
+        body: JSON.stringify({ image: img, tip: false }),
       });
       const data = await res.json();
+      // If the AI fell back (no live result), don't merge the placeholder.
+      if (data.usedLiveAI === false) return;
       const found: FoodItem[] = Array.isArray(data.items) ? data.items : [];
-      if (!found.length) return; // nothing in frame — stay quiet, try next tick
-
+      if (!found.length) return;
       setStartItems((prev) => {
         const have = new Set(prev.map((i) => i.name.toLowerCase().trim()));
         const fresh = found.filter((i) => !have.has(i.name.toLowerCase().trim()));
-        if (fresh.length === 0) return prev; // same items — no change, no chatter
+        if (fresh.length === 0) return prev;
         const merged = [...prev, ...fresh];
         postSession("update", { id: sessionIdRef.current ?? undefined, items: merged, startedAt: startedAtRef.current });
         setCoachLines((p) => [...p, { role: "coach", text: `Added ${fresh.map((i) => i.name).join(", ")}.` }]);
         return merged;
       });
     } catch {
-      // Transient (e.g. rate limit) — just try again next tick.
+      /* transient — a later scene change will retry */
     } finally {
       scanBusyRef.current = false;
       setScanningMore(false);
     }
   }, [captureFrame, postSession]);
 
-  // Run the auto-scan on an interval while eating.
+  // Change-gated loop: cheap fingerprint each second; fire a scan only after a
+  // big change settles into a few stable frames and differs from what we last
+  // scanned. No API calls while the plate sits unchanged.
   useEffect(() => {
     if (phase !== "eating") return;
-    const id = setInterval(() => { void autoScan(); }, 4000);
+    lastScannedFP.current = null;
+    prevFP.current = null;
+    stableTicks.current = 0;
+
+    const id = setInterval(() => {
+      const fp = fingerprint();
+      if (!fp) return;
+
+      const movement = diff(fp, prevFP.current);
+      prevFP.current = fp;
+
+      // Scene is settling if it barely moved vs. the previous tick.
+      if (movement < 0.12) {
+        stableTicks.current += 1;
+      } else {
+        stableTicks.current = 0; // still moving (hand/item in motion)
+      }
+
+      // Fire when: it's been stable ~2s AND the settled scene is meaningfully
+      // different from whatever we last scanned.
+      const changedSinceLastScan = diff(fp, lastScannedFP.current);
+      if (stableTicks.current >= 2 && changedSinceLastScan > 0.2 && !scanBusyRef.current) {
+        lastScannedFP.current = fp;
+        stableTicks.current = 0;
+        void scanNow();
+      }
+    }, 1000);
     return () => clearInterval(id);
-  }, [phase, autoScan]);
+  }, [phase, fingerprint, scanNow]);
 
   function fallbackFromStart() {
     const items = startItemsRef.current;
@@ -615,7 +677,7 @@ function EatingHud(props: {
 
       <button className="btn-primary" onClick={props.onDone}>✓ Done eating</button>
       <p className="dim" style={{ fontSize: 11, marginTop: 6, textAlign: "center" }}>
-        {props.scanningMore ? "Scanning the plate…" : "Hold up each item — I’ll add it automatically."}
+        {props.scanningMore ? "Scanning the new item…" : "Hold up a new item and hold still — I’ll add it."}
       </p>
     </div>
   );

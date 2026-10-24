@@ -6,11 +6,14 @@ export const maxDuration = 30;
 
 /**
  * POST /api/analyze
- * Body: { image: "data:image/jpeg;base64,..." }
- * Returns recognized foods + a coaching tip.
+ * Body: { image: "data:image/jpeg;base64,...", tip?: boolean }
+ * Returns recognized foods, and (when tip !== false) a coaching tip.
+ *
+ * Mid-meal auto-scans pass tip:false to skip the extra coach-tip AI call —
+ * that halves latency/tokens and avoids function timeouts on the hot path.
  */
 export async function POST(req: NextRequest) {
-  let body: { image?: string };
+  let body: { image?: string; tip?: boolean };
   try {
     body = await req.json();
   } catch {
@@ -22,9 +25,14 @@ export async function POST(req: NextRequest) {
   }
 
   const result = await recognizeFood(body.image);
-  const summary =
-    result.items.map((i) => i.name).join(", ") || "a meal";
-  const tip = await coachTip(summary);
+
+  // Only generate a coaching tip when asked (meal start), and only if there's
+  // real food to comment on.
+  let tip: string | null = null;
+  if (body.tip !== false && result.usedLiveAI && result.items.length) {
+    const summary = result.items.map((i) => i.name).join(", ") || "a meal";
+    tip = await coachTip(summary);
+  }
 
   return NextResponse.json({ ...result, coachTip: tip });
 }
