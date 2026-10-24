@@ -27,6 +27,12 @@
     <key>GROQ_API_KEY</key>
     <string>$(GROQ_API_KEY)</string>
 
+    <!-- Supabase (optional: email sign-in + cloud sync) -->
+    <key>SUPABASE_URL</key>
+    <string>$(SUPABASE_URL)</string>
+    <key>SUPABASE_ANON_KEY</key>
+    <string>$(SUPABASE_ANON_KEY)</string>
+
     <!-- Permissions -->
     <key>NSCameraUsageDescription</key>
     <string>NutriWear uses the camera to recognize your food and coach you in real time while you eat. Images are analyzed on the fly and not stored by default.</string>

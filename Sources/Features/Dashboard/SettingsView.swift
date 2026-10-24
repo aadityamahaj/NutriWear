@@ -89,6 +89,33 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("Account") {
+                    if model.accountMode == .signedIn, let email = model.auth.session?.email {
+                        HStack {
+                            Label("Signed in", systemImage: "person.crop.circle.fill")
+                            Spacer()
+                            Text(email).font(.footnote).foregroundStyle(Theme.textSecondary).lineLimit(1)
+                        }
+                        Button(role: .destructive) {
+                            model.signOut(); dismiss()
+                        } label: {
+                            Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
+                        }
+                    } else {
+                        HStack {
+                            Label("Guest", systemImage: "person.crop.circle")
+                            Spacer()
+                            Text("On this device only").font(.footnote).foregroundStyle(Theme.textTertiary)
+                        }
+                        Button {
+                            model.signOut(); dismiss() // returns to the welcome gate to sign in
+                        } label: {
+                            Label("Sign in to sync", systemImage: "icloud.and.arrow.up")
+                                .foregroundStyle(Theme.calories)
+                        }
+                    }
+                }
+
                 Section("Devices") {
                     NavigationLink {
                         BluetoothView().environmentObject(model)

@@ -37,7 +37,9 @@ struct RootView: View {
     var body: some View {
         GeometryReader { proxy in
             Group {
-                if model.profile.hasCompletedOnboarding {
+                if model.accountMode == .unchosen {
+                    WelcomeGateView()
+                } else if model.profile.hasCompletedOnboarding {
                     mainInterface
                 } else {
                     OnboardingView()

@@ -62,3 +62,20 @@ concepts (food items, macros, eating sessions).
   for pace, meal timing, late-night eating, portion leftovers, and protein share,
   then asks the LLM for personalized improvement suggestions (digestion, habits,
   eating length).
+
+## Accounts
+
+- On first open both surfaces show a choice: **continue as guest** (data stays
+  on-device) or **sign in** with a 6-digit email code.
+- Auth is **Supabase email OTP**. Web uses the Supabase JS SDK; iOS calls the
+  same Supabase GoTrue REST endpoints directly (no SDK dependency). Both
+  gracefully run guest-only until Supabase env vars are set.
+- Signed-in users get **per-user cloud storage**: web stores profile/prefs in a
+  `profiles` table; iOS syncs profile + meals to a `user_data` table. Both use
+  Postgres **row-level security** keyed on `auth.uid()` so users only see their
+  own data.
+- The 4-char **pairing code** is unrelated to auth — it only links the phone to
+  the web wearable session. Don't conflate the two.
+- Config: iOS reads `SUPABASE_URL` (host only, no scheme — xcconfig treats `//`
+  as a comment) and `SUPABASE_ANON_KEY` from Secrets.xcconfig; web reads
+  `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`.

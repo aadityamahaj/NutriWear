@@ -7,10 +7,10 @@ import Combine
 @MainActor
 final class AppModel: ObservableObject {
     @Published var profile: UserProfile {
-        didSet { PersistenceStore.saveProfile(profile) }
+        didSet { PersistenceStore.saveProfile(profile); pushToCloud() }
     }
     @Published var meals: [Meal] {
-        didSet { PersistenceStore.saveMeals(meals) }
+        didSet { PersistenceStore.saveMeals(meals); pushToCloud() }
     }
 
     /// A meal that's been recognized but not yet confirmed/logged.
@@ -34,6 +34,17 @@ final class AppModel: ObservableObject {
     let notifications = NotificationService()
     /// Bluetooth connectivity for current and future NutriWear hardware.
     let bluetooth = BluetoothService()
+
+    // MARK: - Account / auth
+
+    let auth = AuthService()
+    /// Guest vs signed-in vs not-yet-chosen. Drives the welcome gate.
+    @Published var accountMode: AccountMode = .unchosen
+    private let accountModeKey = "nutriwear.account.mode.v1"
+    /// Backend sync for a signed-in user's profile + meals.
+    private lazy var userSync = UserSyncClient(auth: auth)
+
+    var authConfigured: Bool { auth.isConfigured }
 
     /// The in-progress eating session (nil when not eating). Drives the
     /// proactive coach and hands-free voice commands.
@@ -67,6 +78,14 @@ final class AppModel: ObservableObject {
     init() {
         self.profile = PersistenceStore.loadProfile()
         self.meals = PersistenceStore.loadMeals()
+
+        // Restore account choice. If a signed-in session exists, honor it;
+        // otherwise fall back to the saved guest/unchosen mode.
+        if let raw = UserDefaults.standard.string(forKey: accountModeKey),
+           let mode = AccountMode(rawValue: raw) {
+            self.accountMode = mode
+        }
+        if auth.isSignedIn { self.accountMode = .signedIn }
 
         // When the wearable ends a session, log it as a meal automatically.
         sync.onSessionEnded = { [weak self] session in
@@ -416,6 +435,42 @@ final class AppModel: ObservableObject {
         case .askCoach(let q):
             return q
         }
+    }
+
+    // MARK: - Account
+
+    func chooseGuest() {
+        accountMode = .guest
+        UserDefaults.standard.set(AccountMode.guest.rawValue, forKey: accountModeKey)
+    }
+
+    /// Called after a successful OTP verification.
+    func didSignIn() {
+        accountMode = .signedIn
+        UserDefaults.standard.set(AccountMode.signedIn.rawValue, forKey: accountModeKey)
+        // Pull the user's cloud data, then keep it in sync.
+        Task { await syncFromCloud() }
+    }
+
+    func signOut() {
+        auth.signOut()
+        accountMode = .unchosen
+        UserDefaults.standard.removeObject(forKey: accountModeKey)
+    }
+
+    /// Load the signed-in user's profile + meals from the backend, if newer.
+    func syncFromCloud() async {
+        guard accountMode == .signedIn, auth.isSignedIn else { return }
+        if let remote = await userSync.fetch() {
+            if let p = remote.profile { profile = p }
+            if let m = remote.meals, !m.isEmpty { meals = m }
+        }
+    }
+
+    /// Push current profile + meals to the backend for a signed-in user.
+    func pushToCloud() {
+        guard accountMode == .signedIn, auth.isSignedIn else { return }
+        Task { await userSync.push(profile: profile, meals: meals) }
     }
 
     // MARK: - Meal type helper
