@@ -437,6 +437,66 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: - Post-meal feeling & foods to avoid
+
+    /// Record how the user felt after a meal. A negative rating learns the
+    /// meal's foods into the avoid list.
+    func rateMeal(_ meal: Meal, feeling: MealFeeling) {
+        guard let idx = meals.firstIndex(where: { $0.id == meal.id }) else { return }
+        meals[idx].feeling = feeling
+        if feeling.isNegative {
+            learnAvoidFoods(from: meals[idx])
+        }
+    }
+
+    /// The most recently logged meal that hasn't been rated yet (drives the
+    /// post-meal prompt).
+    var mealAwaitingFeeling: Meal? {
+        meals.sorted { $0.timestamp > $1.timestamp }
+            .first { $0.feeling == nil && !$0.items.isEmpty }
+    }
+
+    /// Add this meal's foods to the avoid list (deduped, lowercased).
+    private func learnAvoidFoods(from meal: Meal) {
+        var set = Set(profile.avoidFoods.map { $0.lowercased() })
+        for item in meal.items {
+            let key = item.name.lowercased().trimmingCharacters(in: .whitespaces)
+            if !key.isEmpty { set.insert(key) }
+        }
+        profile.avoidFoods = Array(set).sorted()
+    }
+
+    func addAvoidFood(_ name: String) {
+        let key = name.lowercased().trimmingCharacters(in: .whitespaces)
+        guard !key.isEmpty, !profile.avoidFoods.contains(key) else { return }
+        profile.avoidFoods = (profile.avoidFoods + [key]).sorted()
+    }
+
+    func removeAvoidFood(_ name: String) {
+        profile.avoidFoods.removeAll { $0 == name.lowercased() }
+    }
+
+    /// Which detected items match the avoid list (substring match both ways so
+    /// "fries" matches "French fries" and vice versa).
+    func avoidedItems(in items: [FoodItem]) -> [FoodItem] {
+        guard !profile.avoidFoods.isEmpty else { return [] }
+        return items.filter { item in
+            let name = item.name.lowercased()
+            return profile.avoidFoods.contains { avoid in
+                name.contains(avoid) || avoid.contains(name)
+            }
+        }
+    }
+
+    /// A ready-to-show "stop" warning if the current detection hits the avoid
+    /// list, else nil.
+    func avoidWarning(for items: [FoodItem]) -> String? {
+        let hits = avoidedItems(in: items)
+        guard !hits.isEmpty else { return nil }
+        let names = hits.map { $0.name }.joined(separator: ", ")
+        return "Heads up — \(names) is on your avoid list. It hasn't sat well with you before. Maybe skip it or go light."
+    }
+
     // MARK: - Account
 
     func chooseGuest() {

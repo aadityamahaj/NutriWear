@@ -66,6 +66,10 @@ struct UserProfile: Codable, Equatable {
     /// Proactive-coaching settings (delivery channel + which cues fire).
     var coaching: CoachingPreferences = .default
 
+    /// Foods the user wants to avoid (learned from poorly-rated meals + manual
+    /// edits). Lowercased keywords matched against detected food names.
+    var avoidFoods: [String] = []
+
     static let `default` = UserProfile(
         name: "there",
         sex: .male,
@@ -91,6 +95,7 @@ struct UserProfile: Codable, Equatable {
         case name, sex, age, heightCm, weightKg, activity, goal, diet, allergies
         case dailyCalorieTarget, dailyProteinTarget, dailyCarbTarget, dailyFatTarget
         case targetsManuallyEdited, slowEatingReminders, hasCompletedOnboarding, coaching
+        case avoidFoods
     }
 
     init(from decoder: Decoder) throws {
@@ -112,6 +117,7 @@ struct UserProfile: Codable, Equatable {
         slowEatingReminders = try c.decode(Bool.self, forKey: .slowEatingReminders)
         hasCompletedOnboarding = try c.decode(Bool.self, forKey: .hasCompletedOnboarding)
         coaching = try c.decodeIfPresent(CoachingPreferences.self, forKey: .coaching) ?? .default
+        avoidFoods = try c.decodeIfPresent([String].self, forKey: .avoidFoods) ?? []
     }
 
     // Keep the memberwise initializer available (used by `.default`). Declaring
@@ -121,7 +127,8 @@ struct UserProfile: Codable, Equatable {
         activity: ActivityLevel, goal: PrimaryGoal, diet: DietPreference, allergies: String,
         dailyCalorieTarget: Double, dailyProteinTarget: Double, dailyCarbTarget: Double,
         dailyFatTarget: Double, targetsManuallyEdited: Bool, slowEatingReminders: Bool,
-        hasCompletedOnboarding: Bool, coaching: CoachingPreferences = .default
+        hasCompletedOnboarding: Bool, coaching: CoachingPreferences = .default,
+        avoidFoods: [String] = []
     ) {
         self.name = name; self.sex = sex; self.age = age
         self.heightCm = heightCm; self.weightKg = weightKg; self.activity = activity
@@ -132,6 +139,7 @@ struct UserProfile: Codable, Equatable {
         self.slowEatingReminders = slowEatingReminders
         self.hasCompletedOnboarding = hasCompletedOnboarding
         self.coaching = coaching
+        self.avoidFoods = avoidFoods
     }
 
     var dailyTargets: Macros {

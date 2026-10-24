@@ -22,6 +22,10 @@ struct AnalysisSheet: View {
             VStack(alignment: .leading, spacing: 18) {
                 header
 
+                if let warning = model.avoidWarning(for: meal?.items ?? []) {
+                    avoidWarningBanner(warning)
+                }
+
                 if let note = model.recognitionNote {
                     aiNoteBanner(note)
                 }
@@ -68,6 +72,26 @@ struct AnalysisSheet: View {
                 .font(.system(size: 26, weight: .bold))
                 .foregroundStyle(Theme.textPrimary)
         }
+    }
+
+    private func avoidWarningBanner(_ warning: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "hand.raised.fill")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(.black)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("STOP")
+                    .font(.system(size: 12, weight: .heavy))
+                    .foregroundStyle(.black)
+                Text(warning)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.black)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 16).fill(Theme.warning))
     }
 
     private func aiNoteBanner(_ note: String) -> some View {

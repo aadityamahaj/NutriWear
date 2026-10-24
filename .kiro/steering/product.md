@@ -63,6 +63,17 @@ concepts (food items, macros, eating sessions).
   then asks the LLM for personalized improvement suggestions (digestion, habits,
   eating length).
 
+## Post-meal feeling & foods to avoid
+
+- After a meal is logged, the user rates how they feel (great → bad). A negative
+  rating (sluggish/bad) learns that meal's foods into a **foods-to-avoid** list.
+- The avoid list is editable in Settings (iOS) and persisted locally (web).
+- When the camera recognizes a food on the avoid list, the app shows a **"stop"
+  warning** (and speaks it on the web). iOS: `AppModel.rateMeal` /
+  `avoidedItems` / `avoidWarning`, prompt in `MealFeelingPrompt`, warning banner
+  in `AnalysisSheet`. Web: `useAvoidFoods`, warning on recognized start items,
+  feeling prompt in the consumption result card.
+
 ## Accounts
 
 - On first open both surfaces show a choice: **continue as guest** (data stays

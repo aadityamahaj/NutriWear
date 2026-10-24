@@ -4,6 +4,12 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @State private var newAvoidFood = ""
+
+    private func addAvoid() {
+        model.addAvoidFood(newAvoidFood)
+        newAvoidFood = ""
+    }
 
     var body: some View {
         NavigationStack {
@@ -114,6 +120,35 @@ struct SettingsView: View {
                                 .foregroundStyle(Theme.calories)
                         }
                     }
+                }
+
+                Section {
+                    if model.profile.avoidFoods.isEmpty {
+                        Text("No foods to avoid yet. Rate a meal \"sluggish\" or \"bad\" and its foods land here, or add one below.")
+                            .font(.footnote)
+                            .foregroundStyle(Theme.textSecondary)
+                    } else {
+                        ForEach(model.profile.avoidFoods, id: \.self) { food in
+                            Text(food.capitalized)
+                        }
+                        .onDelete { indexSet in
+                            for i in indexSet { model.removeAvoidFood(model.profile.avoidFoods[i]) }
+                        }
+                    }
+                    HStack {
+                        TextField("Add a food to avoid", text: $newAvoidFood)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .onSubmit(addAvoid)
+                        Button(action: addAvoid) {
+                            Image(systemName: "plus.circle.fill").foregroundStyle(Theme.calories)
+                        }
+                        .disabled(newAvoidFood.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                } header: {
+                    Text("Foods to avoid")
+                } footer: {
+                    Text("When the camera detects one of these, NutriWear warns you to stop.")
                 }
 
                 Section("Devices") {

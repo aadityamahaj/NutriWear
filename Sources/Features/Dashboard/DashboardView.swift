@@ -5,6 +5,7 @@ struct DashboardView: View {
     @EnvironmentObject var model: AppModel
     @Binding var showCamera: Bool
     @State private var showSettings = false
+    @State private var dismissedFeelingMealID: UUID?
 
     private var totals: Macros { model.todayTotals }
     private var targets: Macros { model.profile.dailyTargets }
@@ -16,6 +17,10 @@ struct DashboardView: View {
 
                 if !model.aiConfigured {
                     keyBanner
+                }
+
+                if let meal = model.mealAwaitingFeeling, meal.id != dismissedFeelingMealID {
+                    MealFeelingPrompt(meal: meal) { dismissedFeelingMealID = meal.id }
                 }
 
                 calorieCard
@@ -212,10 +217,15 @@ struct MealRow: View {
                         .foregroundStyle(Theme.calories)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(meal.title)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Theme.textPrimary)
-                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        Text(meal.title)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Theme.textPrimary)
+                            .lineLimit(1)
+                        if let feeling = meal.feeling {
+                            Text(feeling.emoji).font(.system(size: 13))
+                        }
+                    }
                     Text(subtitle)
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.textSecondary)

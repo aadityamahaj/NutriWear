@@ -81,6 +81,7 @@ struct Meal: Identifiable, Codable, Hashable {
     var syncID: String?           // id of the originating wearable session, if synced
     var startCalories: Double?    // total on the plate at start (before/after story)
     var leftoverCalories: Double? // left on the plate at the end
+    var feeling: MealFeeling?     // how the user felt after eating, if rated
 
     var totals: Macros {
         items.reduce(.zero) { $0 + $1.macros }

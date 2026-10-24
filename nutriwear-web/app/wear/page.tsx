@@ -8,6 +8,7 @@ import { useEatingDetector } from "@/lib/useEatingDetector";
 import { useVoiceCommand } from "@/lib/useVoiceCommand";
 import { useProactivePace } from "@/lib/useProactivePace";
 import { classifyDirected } from "@/lib/directedSpeech";
+import { useAvoidFoods } from "@/lib/useAvoidFoods";
 
 type Phase = "idle" | "eating" | "analyzing" | "done";
 
@@ -49,6 +50,9 @@ export default function WearPage() {
 
   const [coachLines, setCoachLines] = useState<CoachLine[]>([]);
   const [coachBusy, setCoachBusy] = useState(false);
+
+  // Foods-to-avoid list (learned from poorly-rated meals + manual).
+  const avoid = useAvoidFoods();
 
   // Collapsible bottom HUD — reclaims the camera view on mobile.
   const [hudCollapsed, setHudCollapsed] = useState(false);
@@ -342,6 +346,21 @@ export default function WearPage() {
     onCue: proactiveCue,
   });
 
+  // "Foods to avoid" warning: once the plate is recognized, if it contains a
+  // food that hasn't sat well before, tell the user to stop.
+  const warnedRef = useRef(false);
+  useEffect(() => {
+    if (phase !== "eating") { warnedRef.current = false; return; }
+    if (warnedRef.current || startItems.length === 0) return;
+    const flagged = avoid.matches(startItems);
+    if (flagged.length) {
+      warnedRef.current = true;
+      const warn = `Stop — ${flagged.join(", ")} is on your avoid list. It hasn't sat well with you before; maybe skip it or go light.`;
+      setCoachLines((p) => [...p, { role: "coach", text: warn }]);
+      speak(warn);
+    }
+  }, [startItems, phase, avoid, speak]);
+
   const reset = useCallback(() => {
     setPhase("idle"); setStartedAt(null); setElapsed(0); setSessionId(null);
     setStartItems([]); setResult(null); setCoachLines([]); beforeImageRef.current = null;
@@ -417,7 +436,19 @@ export default function WearPage() {
           </div>
         )}
 
-        {phase === "done" && result && <ConsumptionResultCard result={result} durationLabel={`${mm}:${ss}`} onReset={reset} />}
+        {phase === "done" && result && (
+          <ConsumptionResultCard
+            result={result}
+            durationLabel={`${mm}:${ss}`}
+            onReset={reset}
+            onRate={(feeling) => {
+              // A negative rating learns the eaten foods into the avoid list.
+              if (feeling === "sluggish" || feeling === "bad") {
+                avoid.addMany(result.items.map((i) => i.name));
+              }
+            }}
+          />
+        )}
       </div>
 
       <style>{`.spinner{width:28px;height:28px;border-radius:50%;border:3px solid rgba(255,255,255,0.2);border-top-color:var(--orange);margin:0 auto;animation:spin 0.8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}`}</style>
@@ -581,11 +612,21 @@ function AlwaysListenToggle({ on, listening, error, onToggle }: {
   );
 }
 
-function ConsumptionResultCard({ result, durationLabel, onReset }: {
+const FEELINGS: { key: string; emoji: string; label: string }[] = [
+  { key: "great", emoji: "😀", label: "Great" },
+  { key: "good", emoji: "🙂", label: "Good" },
+  { key: "okay", emoji: "😐", label: "Okay" },
+  { key: "sluggish", emoji: "😮‍💨", label: "Sluggish" },
+  { key: "bad", emoji: "🤢", label: "Bad" },
+];
+
+function ConsumptionResultCard({ result, durationLabel, onReset, onRate }: {
   result: { items: ConsumptionItem[]; startCalories: number; eatenCalories: number; leftoverCalories: number; note: string | null };
   durationLabel: string;
   onReset: () => void;
+  onRate: (feeling: string) => void;
 }) {
+  const [rated, setRated] = useState<string | null>(null);
   return (
     <div className="card" style={{ marginBottom: 10, maxHeight: "74dvh", overflowY: "auto" }}>
       <div className="dim" style={{ fontSize: 12, fontWeight: 700 }}>LOGGED · {durationLabel}</div>
@@ -611,6 +652,33 @@ function ConsumptionResultCard({ result, durationLabel, onReset }: {
       ))}
 
       {result.note && <p className="dim" style={{ fontSize: 11, marginTop: 10 }}>{result.note}</p>}
+
+      {/* Post-meal feeling check-in */}
+      <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--stroke)" }}>
+        {rated ? (
+          <p className="dim" style={{ fontSize: 13 }}>
+            Thanks — noted that you felt <strong style={{ color: "var(--text)" }}>{rated}</strong>.
+            {(rated === "sluggish" || rated === "bad") ? " Added these foods to your avoid list; I'll warn you next time." : ""}
+          </p>
+        ) : (
+          <>
+            <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>How do you feel?</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              {FEELINGS.map((f) => (
+                <button
+                  key={f.key}
+                  onClick={() => { onRate(f.key); setRated(f.label); }}
+                  style={{ flex: 1, background: "var(--card-2)", border: "1px solid var(--stroke)", borderRadius: 12, padding: "10px 4px", display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}
+                >
+                  <span style={{ fontSize: 22 }}>{f.emoji}</span>
+                  <span className="dim" style={{ fontSize: 10, fontWeight: 600 }}>{f.label}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
       <button className="btn-ghost" style={{ marginTop: 14 }} onClick={onReset}>Watch for next meal</button>
     </div>
   );
