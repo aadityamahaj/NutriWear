@@ -237,12 +237,17 @@ export default function WearPage() {
     });
   }, [captureFrame, postSession]);
 
-  // --- Scan another item mid-meal and MERGE it into the plate ---
+  // --- Keep scanning for NEW items automatically while eating ---
+  // Captures the frame on a timer, recognizes it, and merges anything new into
+  // the plate — so holding up a second item adds it with no tap. Silent on
+  // empty frames; only speaks up when something new is actually added.
   const [scanningMore, setScanningMore] = useState(false);
-  const scanMore = useCallback(async () => {
-    if (phaseRef.current !== "eating" || scanningMore) return;
+  const scanBusyRef = useRef(false);
+  const autoScan = useCallback(async () => {
+    if (phaseRef.current !== "eating" || scanBusyRef.current) return;
     const img = captureFrame();
     if (!img) return;
+    scanBusyRef.current = true;
     setScanningMore(true);
     try {
       const res = await fetch("/api/analyze", {
@@ -251,26 +256,32 @@ export default function WearPage() {
         body: JSON.stringify({ image: img }),
       });
       const data = await res.json();
-      const newItems: FoodItem[] = Array.isArray(data.items) ? data.items : [];
-      if (!newItems.length) {
-        setCoachLines((p) => [...p, { role: "coach", text: "I didn't catch a new item there — try holding it closer." }]);
-        return;
-      }
-      // Merge, de-duping by name against what's already on the plate.
+      const found: FoodItem[] = Array.isArray(data.items) ? data.items : [];
+      if (!found.length) return; // nothing in frame — stay quiet, try next tick
+
       setStartItems((prev) => {
         const have = new Set(prev.map((i) => i.name.toLowerCase().trim()));
-        const merged = [...prev, ...newItems.filter((i) => !have.has(i.name.toLowerCase().trim()))];
+        const fresh = found.filter((i) => !have.has(i.name.toLowerCase().trim()));
+        if (fresh.length === 0) return prev; // same items — no change, no chatter
+        const merged = [...prev, ...fresh];
         postSession("update", { id: sessionIdRef.current ?? undefined, items: merged, startedAt: startedAtRef.current });
+        setCoachLines((p) => [...p, { role: "coach", text: `Added ${fresh.map((i) => i.name).join(", ")}.` }]);
         return merged;
       });
-      const added = newItems.map((i) => i.name).join(", ");
-      setCoachLines((p) => [...p, { role: "coach", text: `Added ${added} to this meal.` }]);
     } catch {
-      setCoachLines((p) => [...p, { role: "coach", text: "Couldn't scan that item. Try again." }]);
+      // Transient (e.g. rate limit) — just try again next tick.
     } finally {
+      scanBusyRef.current = false;
       setScanningMore(false);
     }
-  }, [captureFrame, postSession, scanningMore]);
+  }, [captureFrame, postSession]);
+
+  // Run the auto-scan on an interval while eating.
+  useEffect(() => {
+    if (phase !== "eating") return;
+    const id = setInterval(() => { void autoScan(); }, 4000);
+    return () => clearInterval(id);
+  }, [phase, autoScan]);
 
   function fallbackFromStart() {
     const items = startItemsRef.current;
@@ -460,7 +471,7 @@ export default function WearPage() {
             lastHeard={lastHeard} voiceError={voiceError} coachLines={coachLines} coachBusy={coachBusy}
             alwaysListen={alwaysListen} onToggleAlwaysListen={toggleAlwaysListen}
             collapsed={hudCollapsed} onToggleCollapsed={() => setHudCollapsed((c) => !c)}
-            scanningMore={scanningMore} onScanMore={scanMore}
+            scanningMore={scanningMore}
             onToggleVoice={toggle} onDone={doneEating} onAsk={askCoach}
           />
         )}
@@ -518,7 +529,7 @@ function EatingHud(props: {
   coachLines: CoachLine[]; coachBusy: boolean;
   alwaysListen: boolean; onToggleAlwaysListen: () => void;
   collapsed: boolean; onToggleCollapsed: () => void;
-  scanningMore: boolean; onScanMore: () => void;
+  scanningMore: boolean;
   onToggleVoice: () => void; onDone: () => void; onAsk: (q: string) => void;
 }) {
   const [typed, setTyped] = useState("");
@@ -602,19 +613,9 @@ function EatingHud(props: {
         {typed.trim() && <button type="submit" className="btn-ghost" style={{ width: "auto", padding: "0 16px" }}>Ask</button>}
       </form>
 
-      <div style={{ display: "flex", gap: 8 }}>
-        <button
-          className="btn-ghost"
-          style={{ flex: 1, color: props.scanningMore ? "var(--orange)" : undefined }}
-          onClick={props.onScanMore}
-          disabled={props.scanningMore}
-        >
-          {props.scanningMore ? "Scanning…" : "＋ Scan item"}
-        </button>
-        <button className="btn-primary" style={{ flex: 1 }} onClick={props.onDone}>✓ Done eating</button>
-      </div>
+      <button className="btn-primary" onClick={props.onDone}>✓ Done eating</button>
       <p className="dim" style={{ fontSize: 11, marginTop: 6, textAlign: "center" }}>
-        Hold up each item and tap “Scan item” to add it.
+        {props.scanningMore ? "Scanning the plate…" : "Hold up each item — I’ll add it automatically."}
       </p>
     </div>
   );
