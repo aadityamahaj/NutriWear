@@ -54,7 +54,8 @@ a {
   max-width: 460px;
   margin: 0 auto;
   min-height: 100dvh;
-  padding: 20px 18px calc(28px + env(safe-area-inset-bottom));
+  /* Extra bottom clearance so content isn't hidden behind the floating nav. */
+  padding: 20px 18px calc(96px + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
 }

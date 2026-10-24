@@ -368,7 +368,7 @@ export default function WearPage() {
         </div>
       )}
 
-      <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, padding: "0 16px calc(24px + env(safe-area-inset-bottom))" }}>
+      <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, padding: "0 16px calc(76px + env(safe-area-inset-bottom))" }}>
         {phase === "idle" && (
           <div style={{ textAlign: "center", marginBottom: 18 }}>
             <div className="pill" style={{ background: "rgba(0,0,0,0.55)", marginBottom: 14 }}>
