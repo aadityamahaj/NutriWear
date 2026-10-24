@@ -50,6 +50,9 @@ export default function WearPage() {
   const [coachLines, setCoachLines] = useState<CoachLine[]>([]);
   const [coachBusy, setCoachBusy] = useState(false);
 
+  // Collapsible bottom HUD — reclaims the camera view on mobile.
+  const [hudCollapsed, setHudCollapsed] = useState(false);
+
   // "Always listening" — keep the mic on continuously (persisted).
   const [alwaysListen, setAlwaysListen] = useState(false);
   const alwaysListenRef = useRef(false);
@@ -390,6 +393,7 @@ export default function WearPage() {
             startCount={startItems.length} listening={listening} voiceSupported={voiceSupported}
             lastHeard={lastHeard} voiceError={voiceError} coachLines={coachLines} coachBusy={coachBusy}
             alwaysListen={alwaysListen} onToggleAlwaysListen={toggleAlwaysListen}
+            collapsed={hudCollapsed} onToggleCollapsed={() => setHudCollapsed((c) => !c)}
             onToggleVoice={toggle} onDone={doneEating} onAsk={askCoach}
           />
         )}
@@ -434,15 +438,53 @@ function EatingHud(props: {
   listening: boolean; voiceSupported: boolean; lastHeard: string; voiceError: string | null;
   coachLines: CoachLine[]; coachBusy: boolean;
   alwaysListen: boolean; onToggleAlwaysListen: () => void;
+  collapsed: boolean; onToggleCollapsed: () => void;
   onToggleVoice: () => void; onDone: () => void; onAsk: (q: string) => void;
 }) {
   const [typed, setTyped] = useState("");
   const lastCoach = [...props.coachLines].reverse().find((l) => l.role === "coach");
+
+  // Collapsed: a slim bar that reclaims the camera view. Tap it (or the
+  // chevron) to pop the full controls back up.
+  if (props.collapsed) {
+    return (
+      <div
+        className="card"
+        style={{ marginBottom: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10 }}
+      >
+        <button
+          onClick={props.onToggleCollapsed}
+          aria-label="Expand controls"
+          style={{ display: "flex", alignItems: "center", gap: 10, background: "none", border: "none", color: "var(--text)", cursor: "pointer", flex: 1, padding: 0, textAlign: "left" }}
+        >
+          <span className="rec-dot" />
+          <span style={{ fontWeight: 800, fontSize: 14, fontFamily: "ui-monospace, monospace" }}>{props.time}</span>
+          {props.listening && <span style={{ fontSize: 12, color: "var(--orange)" }}>🎙️</span>}
+          {props.coachBusy && <span style={{ fontSize: 12, color: "var(--yellow)" }}>✦ …</span>}
+          <span style={{ marginLeft: "auto", fontSize: 18, color: "var(--text-3)" }}>▲</span>
+        </button>
+        <button className="btn-primary" style={{ width: "auto", padding: "8px 16px", fontSize: 14 }} onClick={props.onDone}>✓ Done</button>
+      </div>
+    );
+  }
+
   return (
     <div className="card" style={{ marginBottom: 10 }}>
+      {/* Grab handle + collapse control */}
+      <button
+        onClick={props.onToggleCollapsed}
+        aria-label="Collapse controls"
+        style={{ display: "block", width: 44, height: 5, margin: "0 auto 12px", borderRadius: 999, background: "var(--text-3)", border: "none", cursor: "pointer", padding: 0 }}
+      />
+
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
         <span className="rec-dot" /><span style={{ fontWeight: 800, fontSize: 15 }}>Eating</span>
         <span style={{ marginLeft: "auto", fontSize: 26, fontWeight: 800, fontFamily: "ui-monospace, monospace" }}>{props.time}</span>
+        <button
+          onClick={props.onToggleCollapsed}
+          aria-label="Collapse"
+          style={{ background: "var(--card-2)", border: "1px solid var(--stroke)", borderRadius: 10, color: "var(--text-2)", cursor: "pointer", width: 32, height: 32, fontSize: 14 }}
+        >▼</button>
       </div>
       <div className="dim" style={{ fontSize: 12, marginBottom: 10 }}>
         {props.scanningStart ? "Snapshotting your full plate…"

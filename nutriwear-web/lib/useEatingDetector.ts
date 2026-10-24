@@ -7,6 +7,14 @@ interface Args {
   captureFrame: (maxDim?: number) => string | null;
   onDetect: (label?: string) => void;
   onHint?: (hint: string) => void;
+  /**
+   * When true, confirm with the vision model before auto-starting. This is
+   * more accurate but spends Groq tokens on a timer while idle, which can
+   * exhaust the free-tier rate limit before the meal analysis even runs.
+   * Defaults to false: auto-start uses the free on-device heuristic, and the
+   * vision model is saved for the recognition/compare that actually matter.
+   */
+  useVisionConfirm?: boolean;
 }
 
 /**
@@ -24,7 +32,7 @@ interface Args {
  *
  * The manual "Start eating" button always remains as a fallback.
  */
-export function useEatingDetector({ enabled, captureFrame, onDetect, onHint }: Args) {
+export function useEatingDetector({ enabled, captureFrame, onDetect, onHint, useVisionConfirm = false }: Args) {
   const prevHistogram = useRef<number[] | null>(null);
   const richStreak = useRef(0);
   const firedRef = useRef(false);
@@ -139,10 +147,16 @@ export function useEatingDetector({ enabled, captureFrame, onDetect, onHint }: A
           onHint?.("Watching for your meal…");
         }
 
-        // Only confirm with the vision model once the cheap gate is quite
-        // confident (3 consecutive rich+stable samples), to conserve tokens.
+        // Fire once the cheap gate is confident (3 consecutive rich+stable
+        // samples). Optionally confirm with the vision model; by default we
+        // trust the free heuristic to avoid spending tokens on idle detection.
         if (richStreak.current >= 3) {
-          void confirmWithVision();
+          if (useVisionConfirm) {
+            void confirmWithVision();
+          } else {
+            firedRef.current = true;
+            onDetect();
+          }
         }
       };
       img.src = dataURL;
@@ -154,5 +168,5 @@ export function useEatingDetector({ enabled, captureFrame, onDetect, onHint }: A
       clearInterval(id);
       clearTimeout(warm);
     };
-  }, [enabled, captureFrame, onDetect, onHint]);
+  }, [enabled, captureFrame, onDetect, onHint, useVisionConfirm]);
 }
