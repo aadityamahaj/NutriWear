@@ -1,10 +1,19 @@
 import { NextRequest } from "next/server";
-import { getChannel, subscribe } from "@/lib/store";
+import { getChannel } from "@/lib/store";
 import { SyncEvent } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+// Keep the SSE connection open long enough to be useful on serverless.
+export const maxDuration = 300;
 
-// GET /api/stream?code=XXXX  → Server-Sent Events of sync events for that channel.
+/**
+ * GET /api/stream?code=XXXX  → Server-Sent Events for a channel.
+ *
+ * Polls the shared store once a second and emits a full `state` event whenever
+ * the channel's `updatedAt` changes. This works identically with the Redis
+ * backend (production, cross-instance) and the in-memory backend (local dev),
+ * which is why live sync now survives Vercel's serverless model.
+ */
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code")?.toUpperCase();
   if (!code) {
@@ -14,31 +23,63 @@ export async function GET(req: NextRequest) {
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
-    start(controller) {
+    async start(controller) {
+      let closed = false;
       const send = (event: SyncEvent) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        } catch {
+          closed = true;
+        }
       };
 
-      // Immediately send the current full state so new subscribers sync up.
-      send({ type: "state", state: getChannel(code) });
+      // Send current state immediately so a new subscriber syncs up.
+      let lastUpdatedAt = 0;
+      try {
+        const initial = await getChannel(code);
+        lastUpdatedAt = initial.updatedAt;
+        send({ type: "state", state: initial });
+      } catch {
+        /* ignore — the poll loop will retry */
+      }
 
-      const unsubscribe = subscribe(code, send);
+      // Poll for changes.
+      const poll = setInterval(async () => {
+        if (closed) return;
+        try {
+          const state = await getChannel(code);
+          if (state.updatedAt !== lastUpdatedAt) {
+            lastUpdatedAt = state.updatedAt;
+            send({ type: "state", state });
+          }
+        } catch {
+          /* transient store error — try again next tick */
+        }
+      }, 1000);
 
-      // Heartbeat to keep the connection alive through proxies.
+      // Heartbeat keeps the connection alive through proxies.
       const heartbeat = setInterval(() => {
-        controller.enqueue(encoder.encode(`: ping\n\n`));
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`: ping\n\n`));
+        } catch {
+          closed = true;
+        }
       }, 15000);
 
-      // Clean up when the client disconnects.
-      req.signal.addEventListener("abort", () => {
+      const cleanup = () => {
+        closed = true;
+        clearInterval(poll);
         clearInterval(heartbeat);
-        unsubscribe();
         try {
           controller.close();
         } catch {
           /* already closed */
         }
-      });
+      };
+
+      req.signal.addEventListener("abort", cleanup);
     },
   });
 
