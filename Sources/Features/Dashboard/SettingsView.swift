@@ -5,6 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var newAvoidFood = ""
+    @State private var showResetConfirm = false
 
     private func addAvoid() {
         model.addAvoidFood(newAvoidFood)
@@ -95,17 +96,12 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("Account") {
+                Section {
                     if model.accountMode == .signedIn, let email = model.auth.session?.email {
                         HStack {
                             Label("Signed in", systemImage: "person.crop.circle.fill")
                             Spacer()
                             Text(email).font(.footnote).foregroundStyle(Theme.textSecondary).lineLimit(1)
-                        }
-                        Button(role: .destructive) {
-                            model.signOut(); dismiss()
-                        } label: {
-                            Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
                         }
                     } else {
                         HStack {
@@ -113,6 +109,21 @@ struct SettingsView: View {
                             Spacer()
                             Text("On this device only").font(.footnote).foregroundStyle(Theme.textTertiary)
                         }
+                    }
+
+                    Button(role: .destructive) {
+                        showResetConfirm = true
+                    } label: {
+                        Label("Sign out & reset all data", systemImage: "trash")
+                    }
+                } header: {
+                    Text("Account")
+                } footer: {
+                    Text("Signs you out and erases all meals, preferences, and your avoid list on this device, returning to the welcome screen.")
+                }
+
+                if model.accountMode != .signedIn {
+                    Section("Sign in") {
                         Button {
                             model.signOut(); dismiss() // returns to the welcome gate to sign in
                         } label: {
@@ -185,6 +196,15 @@ struct SettingsView: View {
             .background(Theme.background)
             .navigationTitle("Profile")
             .navigationBarTitleDisplayMode(.inline)
+            .alert("Sign out & reset?", isPresented: $showResetConfirm) {
+                Button("Cancel", role: .cancel) { }
+                Button("Reset everything", role: .destructive) {
+                    model.resetAllData()
+                    dismiss()
+                }
+            } message: {
+                Text("This erases all your meals, preferences, and avoid list on this device and signs you out. This can't be undone.")
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }

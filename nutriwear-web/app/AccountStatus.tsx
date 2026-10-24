@@ -11,10 +11,21 @@ export default function AccountStatus() {
   const { mode, user, signOut } = useSession();
 
   const handleSignOut = async () => {
+    const ok = window.confirm(
+      "Sign out and reset all data? This erases your meals, preferences, pairing code, and avoid list on this device."
+    );
+    if (!ok) return;
+
     const supabase = getSupabase();
     if (supabase) {
       try { await supabase.auth.signOut(); } catch { /* ignore */ }
     }
+    // Wipe all NutriWear local data.
+    try {
+      Object.keys(localStorage)
+        .filter((k) => k.startsWith("nutriwear."))
+        .forEach((k) => localStorage.removeItem(k));
+    } catch { /* ignore */ }
     signOut();
   };
 
@@ -49,15 +60,21 @@ export default function AccountStatus() {
 
   // Guest
   return (
-    <div className="card" style={{ display: "flex", alignItems: "center", gap: 12, padding: 14 }}>
+    <div className="card" style={{ display: "flex", alignItems: "center", gap: 10, padding: 14 }}>
       <div style={{ fontSize: 20 }}>👤</div>
       <div style={{ minWidth: 0 }}>
         <div style={{ fontWeight: 700, fontSize: 13 }}>Guest</div>
         <div className="dim" style={{ fontSize: 12 }}>Data saved on this device only</div>
       </div>
       <button
+        onClick={handleSignOut}
+        style={{ marginLeft: "auto", background: "var(--card-2)", border: "1px solid var(--stroke)", borderRadius: 10, color: "var(--text-2)", padding: "8px 10px", fontSize: 12, fontWeight: 600 }}
+      >
+        Reset
+      </button>
+      <button
         onClick={signOut}
-        style={{ marginLeft: "auto", background: "var(--card-2)", border: "1px solid var(--stroke)", borderRadius: 10, color: "var(--orange)", padding: "8px 12px", fontSize: 12, fontWeight: 700 }}
+        style={{ background: "var(--card-2)", border: "1px solid var(--stroke)", borderRadius: 10, color: "var(--orange)", padding: "8px 10px", fontSize: 12, fontWeight: 700 }}
       >
         Sign in
       </button>

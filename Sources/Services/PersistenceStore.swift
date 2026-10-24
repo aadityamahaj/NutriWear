@@ -45,4 +45,17 @@ enum PersistenceStore {
             UserDefaults.standard.set(data, forKey: profileKey)
         }
     }
+
+    /// Wipe all locally persisted NutriWear data (meals, profile, and the
+    /// sync/account/preference keys). Used by "Sign out & reset".
+    static func clearAll() {
+        let keys = [
+            mealsKey, profileKey,
+            "nutriwear.account.mode.v1",
+            "nutriwear.auth.session.v1",
+            "nutriwear.sync.url",
+            "nutriwear.sync.code",
+        ]
+        for key in keys { UserDefaults.standard.removeObject(forKey: key) }
+    }
 }

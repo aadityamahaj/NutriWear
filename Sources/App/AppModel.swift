@@ -538,6 +538,29 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.removeObject(forKey: accountModeKey)
     }
 
+    /// Sign out AND wipe everything: cloud session, all local data (meals,
+    /// profile, preferences, avoid list), and in-memory state. Returns the app
+    /// to the welcome screen as a clean slate. Destructive.
+    func resetAllData() {
+        // End any live session/listening first.
+        if activeSession != nil { sessionTask?.cancel(); sessionTask = nil; activeSession = nil }
+        if speech.isListening { speech.stopListening() }
+
+        auth.signOut()
+        PersistenceStore.clearAll()
+
+        // Reset in-memory state to defaults. The didSet observers will re-save
+        // the fresh defaults; pushToCloud is a no-op now that we're signed out.
+        meals = []
+        pendingMeal = nil
+        pendingCoachTip = nil
+        lastCueMessage = nil
+        improvementSuggestions = []
+        loggedSyncIDs = []
+        profile = .default
+        accountMode = .unchosen
+    }
+
     /// Load the signed-in user's profile + meals from the backend, if newer.
     func syncFromCloud() async {
         guard accountMode == .signedIn, auth.isSignedIn else { return }

@@ -200,12 +200,22 @@ export default function WearPage() {
 
     if (before && after && startItemsPayload.length > 0) {
       try {
+        // Cap the wait: the two-image vision compare can be slow or time out.
+        // If it doesn't answer in time, fall back to the known start items so
+        // the UI never hangs on "Comparing…".
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 18000);
         const r = await fetch("/api/compare", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ before, after, startItems: startItemsPayload }),
+          signal: controller.signal,
         });
-        res = await r.json();
+        clearTimeout(timer);
+        const parsed = await r.json();
+        // If the server fell back (rate limit / error), use our consistent
+        // start-based estimate instead of a placeholder.
+        res = parsed.usedLiveAI === false ? fallbackFromStart() : parsed;
       } catch {
         res = fallbackFromStart();
       }
