@@ -46,6 +46,19 @@ xcodebuild -project NutriWear.xcodeproj -scheme NutriWear \
 Pair the iOS **Live** tab with the web app using the machine's LAN URL
 (`http://<your-ip>:3000`) and the pairing code shown in the web UI.
 
+## Optional services
+
+- **Accounts (Supabase):** email 6-digit OTP + per-user storage. iOS reads
+  `SUPABASE_URL` (host only — no `https://`, since xcconfig treats `//` as a
+  comment) and `SUPABASE_ANON_KEY` from Secrets.xcconfig; web reads
+  `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Unset = guest-only.
+- **Live sync at scale (Upstash Redis):** set `UPSTASH_REDIS_REST_URL` /
+  `UPSTASH_REDIS_REST_TOKEN` on the web app so sync survives Vercel's
+  multi-instance serverless model. Unset = in-memory (single-process) fallback.
+- Full deployment walkthrough: `nutriwear-web/DEPLOY.md`.
+- Never use the Supabase `service_role` key in the app — anon key only (RLS
+  protects per-user rows).
+
 ## Secrets
 
 Never commit real keys. `Secrets.xcconfig` and `nutriwear-web/.env.local` are
