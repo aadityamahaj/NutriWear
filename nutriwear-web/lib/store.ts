@@ -20,11 +20,14 @@ import { ChannelState, EatingSession } from "./types";
  * is needed.
  */
 
+// A not-yet-written channel uses a stable `updatedAt: 0` so the stream doesn't
+// emit a fresh empty-state event on every poll. The first real write sets a
+// real timestamp.
 const EMPTY = (code: string): ChannelState => ({
   code,
   current: null,
   history: [],
-  updatedAt: Date.now(),
+  updatedAt: 0,
 });
 
 // Channel state expires after this many seconds of inactivity (keeps Redis
