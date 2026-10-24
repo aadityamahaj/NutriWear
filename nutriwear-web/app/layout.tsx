@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import NavBar from "./NavBar";
+import { SessionProvider } from "@/lib/session";
+import WelcomeGate from "./WelcomeGate";
 
 export const metadata: Metadata = {
   title: "NutriWear",
@@ -23,8 +25,12 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        {children}
-        <NavBar />
+        <SessionProvider>
+          <WelcomeGate>
+            {children}
+            <NavBar />
+          </WelcomeGate>
+        </SessionProvider>
       </body>
     </html>
   );

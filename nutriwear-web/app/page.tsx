@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePairingCode } from "@/lib/useChannel";
+import AccountStatus from "./AccountStatus";
 
 export default function Home() {
   const [code] = usePairingCode();
@@ -55,6 +56,8 @@ export default function Home() {
             Enter this on your phone&apos;s NutriWear app to sync live.
           </div>
         </div>
+
+        <AccountStatus />
       </div>
 
       <p className="dim" style={{ fontSize: 11, textAlign: "center", marginTop: 20 }}>
